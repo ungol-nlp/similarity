@@ -1,0 +1,3 @@
+* UNGOL WMD - Captain's Log
+
+** TODO <2018-08-28 Di> setup running skeleton

@@ -1,0 +1,9 @@
+flake8
+autopep8
+ipython
+sphinx
+
+tqdm
+h5py
+attrs
+numpy
