@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import numpy as np
 
+import h5py
+import numpy as np
 from tqdm import tqdm as _tqdm
+from tabulate import tabulate
 
 import pickle
 import argparse
@@ -50,32 +52,45 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
     return dist
 
 
-def _transport_matrix(doc1: '(n1, bits)', doc2: '(n2, bits)') -> '(n1, n2)':
-    print('doc1', doc1.shape)
-    print('doc2', doc2.shape)
+def transport_matrix_loop(
+        doc1: '(n1, bits)',
+        doc2: '(n2, bits)') -> '(n1, n2)':
 
     n1, n2 = doc1.shape[0], doc2.shape[0]
+    T = np.zeros((n1, n2))
 
-    # target matrix is of shape (n1, n2) -> build a meshgrid
-    # for all possible index combinations
-    grid: '(n1, n2)' = np.meshgrid(np.arange(n1), np.arange(n2))
+    # target matrix is of shape (n1, n2) -> build
+    # a meshgrid for all possible index combinations
+    # grid: '(n1, n2)' = np.meshgrid(np.arange(n1), np.arange(n2))
 
-    print('>', grid[0])
+    # compute distance for every possible combination of words
+    for i in range(n1):
+        c1 = doc1[i]
+        for j in range(n2):
+            c2 = doc2[j]
+            T[i][j] = hamming_bincount(c1, c2)
+
+    return T
 
 
 def dist(doc1: np.ndarray, doc2: np.ndarray) -> float:
-    T1 = _transport_matrix(doc1, doc2)
+    T = transport_matrix_loop(doc1, doc2)
 
-    print(T1)
+    doc1_min = np.argmin(T, axis=1)
+    doc2_min = np.argmin(T, axis=0)
 
-    # 2. compute transport matrices
+    assert doc1.shape[0] == doc1_min.shape[0]
+    assert doc2.shape[0] == doc2_min.shape[0]
 
-    # 3. compute wmd
-    # print('-' * 40)
-    # print(doc1)
-    # print('-' * 40)
-    # print(doc2)
-    # print('-' * 40)
+    # note: this returns the _first_ occurence if there
+    # are multiple codes with the same distance
+
+    print(T)
+    print('\ndoc1', doc1_min)
+    print('dists', T[np.arange(T.shape[0]), doc1_min])
+
+    print('doc1', doc2_min)
+    print('dists', T.T[np.arange(T.shape[1]), doc2_min])
 
 
 def _load_vocabulary(fname: str) -> Dict[str, int]:
@@ -91,9 +106,6 @@ def _load_codes(fname: str, bits: int, words: int) -> np.ndarray:
     with open(fname, 'rb') as fd:
         buf = fd.read()
 
-    # dt = np.dtype(np.uint8)
-    # dt = dt.newbyteorder('>')
-
     raw = np.frombuffer(buf, dtype=np.uint8)
     codes = raw.reshape(-1, bits // 8)
 
@@ -101,7 +113,7 @@ def _load_codes(fname: str, bits: int, words: int) -> np.ndarray:
     assert words == codes.shape[0], 'words=({}) =/= codes({})'.format(
         words, codes.shape[0])
 
-    return np.array(codes)
+    return codes
 
 
 def _map_to_codes(
@@ -113,10 +125,26 @@ def _map_to_codes(
     return np.vstack(mapping)
 
 
+def __print_doc(tokens, vocab, codes, __ranges):
+    print('document of length: {}'.format(len(tokens)))
+
+    tab_data = []
+    header = ('word', 'index', 'code sum', 'knn start', 'knn end')
+
+    for token, code in zip(tokens, codes):
+        assert code.shape[0] == codes.shape[1]
+
+        idx = vocab[token]
+        tab_data.append((token, idx, code.sum(),
+                         __ranges[0][idx], __ranges[1][idx]))
+
+    print('\n', tabulate(tab_data, headers=header), '\n')
+
+
 def main(args):
     print('\n', 'welcome to vngol wmd'.upper(), '\n')
 
-    tokens1 = 'hallo', 'welt', 'wie', 'gehts'
+    tokens1 = 'hallo', 'welt', 'wie', 'gehen'
     tokens2 = 'moin', 'ich', 'laufe', 'gern', 'kühlschrank'
 
     vocab = _load_vocabulary(args.vocabulary)
@@ -124,8 +152,20 @@ def main(args):
 
     assert len(vocab) == codes.shape[0]
 
+    # --- tmp
+
+    print('__loading ranges')
+    __KNN = 50
+    __fd = h5py.File(args.knn, 'r')
+    __ranges = __fd['dists'][:, 1], __fd['dists'][:, __KNN]
+
+    # ---
+
     doc1 = _map_to_codes(tokens1, vocab, codes)
     doc2 = _map_to_codes(tokens2, vocab, codes)
+
+    __print_doc(tokens1, vocab, doc1, __ranges)
+    __print_doc(tokens2, vocab, doc2, __ranges)
 
     assert doc1.shape[0] == len(doc1)
     assert doc2.shape[0] == len(doc2)
@@ -137,16 +177,23 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        'codes', type=str, nargs=1,
+        'codes', type=str,
         help='binary code file produced by ungol-models/ungol.embcodr', )
 
     parser.add_argument(
-        'bits', type=int, nargs=1,
+        'bits', type=int,
         help='how many bits the codes have', )
 
     parser.add_argument(
         'vocabulary', type=str,
         help='pickle produced by ungol-models/ungol.analyze.vocabulary', )
+
+    # This file is included temporarily to play around with
+    # thresholding/weighting by distance. It may be included in the
+    # binary code file at some later point.
+    parser.add_argument(
+        'knn', type=str,
+        help='knn file TEMPORARY!')
 
     return parser.parse_args()
 
