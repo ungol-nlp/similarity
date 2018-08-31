@@ -4,6 +4,7 @@
 
 from ungol.models import embcodr
 
+import attr
 import numpy as np
 from tqdm import tqdm as _tqdm
 from tabulate import tabulate
@@ -14,11 +15,25 @@ import functools
 
 from typing import Dict
 from typing import List
+from typing import Tuple
 
 
 # ---
 
 tqdm = functools.partial(_tqdm, ncols=80)
+
+# ---
+
+
+@attr.s
+class Doc:
+
+    tokens: List[str] = attr.ib()  # (n, )
+    codes: np.ndarray = attr.ib()  # (n, bytes)
+    dists: np.ndarray = attr.ib()  # (n, knn)
+
+    def __getitem__(self, key):
+        return self.codes[key], self.dists[key]
 
 # ---
 
@@ -53,11 +68,16 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
     return dist
 
 
-def transport_matrix_loop(
-        doc1: '(n1, bits)',
-        doc2: '(n2, bits)') -> '(n1, n2)':
+def _norm_dist(hamming_dist, maxdist):
+    dist = min(hamming_dist, maxdist)
+    normed = dist / maxdist
 
-    n1, n2 = doc1.shape[0], doc2.shape[0]
+    assert 0 <= normed and normed <= 1
+    return normed
+
+
+def transport_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
+    n1, n2 = doc1.codes.shape[0], doc2.codes.shape[0]
     T = np.zeros((n1, n2))
 
     # target matrix is of shape (n1, n2) -> build
@@ -66,32 +86,49 @@ def transport_matrix_loop(
 
     # compute distance for every possible combination of words
     for i in range(n1):
-        c1 = doc1[i]
+        c1, d1 = doc1[i]
+
         for j in range(n2):
-            c2 = doc2[j]
-            T[i][j] = hamming_bincount(c1, c2)
+            c2, d2 = doc2[j]
+
+            hamming_dist = hamming_bincount(c1, c2)
+            normed = _norm_dist(hamming_dist, 100)
+
+            T[i][j] = normed
 
     return T
 
 
-def dist(doc1: np.ndarray, doc2: np.ndarray) -> float:
+def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
+    assert len(doc1.tokens) == len(min_idx)
+    assert len(doc1.tokens) == len(min_dist)
+
+    nn = [doc2.tokens[idx] for idx in min_idx]
+
+    tab_data = sorted(zip(doc1.tokens, nn, min_dist), key=lambda t: t[2])
+    print('\n', tabulate(tab_data, headers=['token', 'neighbour', 'distance']))
+
+
+def dist(doc1: Doc, doc2: Doc) -> float:
     T = transport_matrix_loop(doc1, doc2)
 
-    doc1_min = np.argmin(T, axis=1)
-    doc2_min = np.argmin(T, axis=0)
+    doc1_idx = np.argmin(T, axis=1)
+    doc2_idx = np.argmin(T, axis=0)
 
-    assert doc1.shape[0] == doc1_min.shape[0]
-    assert doc2.shape[0] == doc2_min.shape[0]
+    assert doc1.codes.shape[0] == doc1_idx.shape[0]
+    assert doc2.codes.shape[0] == doc2_idx.shape[0]
 
     # note: this returns the _first_ occurence if there
     # are multiple codes with the same distance
+    doc1_dists = T[np.arange(T.shape[0]), doc1_idx]
+    doc2_dists = T.T[np.arange(T.shape[1]), doc2_idx]
 
-    print(T)
-    print('\ndoc1', doc1_min)
-    print('dists', T[np.arange(T.shape[0]), doc1_min])
+    print('\nhamming distances:'.upper())
+    __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
+    __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
 
-    print('doc1', doc2_min)
-    print('dists', T.T[np.arange(T.shape[1]), doc2_min])
+    score = max(doc1_dists.mean(), doc2_dists.mean())
+    return score
 
 
 def _load_vocabulary(fname: str) -> Dict[str, int]:
@@ -104,27 +141,35 @@ def _load_vocabulary(fname: str) -> Dict[str, int]:
 
 
 def _map_to_codes(
-        words: List[str],
+        tokens: List[str],
         vocab: Dict[str, int],
-        codes: np.array) -> np.ndarray:
+        codes: np.array,
+        dists: np.array) -> Tuple['codes', 'dists']:
 
-    mapping = [codes[vocab[word]] for word in words]
-    return np.vstack(mapping)
+    selection = [vocab[token] for token in tokens]
+
+    return Doc(
+        tokens=tokens,
+        codes=codes[selection],
+        dists=dists[selection], )
 
 
-def __print_doc(tokens, vocab, codes):
-    print('document of length: {}'.format(len(tokens)))
+def __print_doc(tokens, vocab, meta, doc):
+    print('\ndocument of length: {}'.format(len(tokens)))
 
     tab_data = []
-    header = ('word', 'index', 'code sum', 'knn start', 'knn end')
 
-    # FIXME knn start, knn end
+    header_knn = tuple('{}-nn'.format(k) for k in meta['knn'])
+    header = ('word', 'index', 'code sum', ) + header_knn
 
-    for token, code in zip(tokens, codes):
-        assert code.shape[0] == codes.shape[1]
+    assert doc.codes.shape[0] == len(tokens)
+    assert doc.codes.shape[0] == doc.dists.shape[0]
+
+    for token, code, dist in zip(tokens, doc.codes, doc.dists):
+        assert code.shape[0] == doc.codes.shape[1]
 
         idx = vocab[token]
-        tab_data.append((token, idx, code.sum(), ))
+        tab_data.append((token, idx, code.sum()) + tuple(dist))
 
     print('\n', tabulate(tab_data, headers=header), '\n')
 
@@ -132,26 +177,27 @@ def __print_doc(tokens, vocab, codes):
 def main(args):
     print('\n', 'welcome to vngol wmd'.upper(), '\n')
     print('please note: binary data loaded is not checked for malicious')
-    print('content - never load anything you did not produce!')
+    print('content - never load anything you did not produce!\n')
 
     tokens1 = 'hallo', 'welt', 'wie', 'gehen'
     tokens2 = 'moin', 'ich', 'laufe', 'gern', 'kühlschrank'
 
     vocab = _load_vocabulary(args.vocabulary)
-    codes = embcodr.load_codes_bin(args.codes)
+    meta, dists, codes = embcodr.load_codes_bin(args.codes)
 
+    assert 'knn' in meta
+    assert len(vocab) == dists.shape[0]
     assert len(vocab) == codes.shape[0]
 
-    doc1 = _map_to_codes(tokens1, vocab, codes)
-    doc2 = _map_to_codes(tokens2, vocab, codes)
+    doc1 = _map_to_codes(tokens1, vocab, codes, dists)
+    doc2 = _map_to_codes(tokens2, vocab, codes, dists)
 
-    __print_doc(tokens1, vocab, doc1)
-    __print_doc(tokens2, vocab, doc2)
+    print('\ndocuments:'.upper())
+    __print_doc(tokens1, vocab, meta, doc1)
+    __print_doc(tokens2, vocab, meta, doc2)
 
-    assert doc1.shape[0] == len(doc1)
-    assert doc2.shape[0] == len(doc2)
-
-    dist(doc1, doc2)
+    score = dist(doc1, doc2)
+    print('\nscore: {}'.format(score))
 
 
 def parse_args():
