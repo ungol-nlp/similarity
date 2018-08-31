@@ -1,6 +1,6 @@
 # -*- coding: utf-8
 
-from ungol import wmd
+from ungol.wmd import wmd
 
 import numpy as np
 
