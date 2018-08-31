@@ -7,3 +7,10 @@ tqdm
 h5py
 attrs
 numpy
+torchvision
+
+# locally -- pip install -e <PROJECT>
+#            pip install -r <PROJECT>/requirements.txt
+#
+#   ungol-wmd
+#   ember
