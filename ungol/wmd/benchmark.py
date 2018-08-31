@@ -15,7 +15,7 @@ import timeit
 
 
 setup = '''
-from ungol import wmd
+from ungol.wmd import wmd
 import numpy as np
 
 bytecount = 32
@@ -27,15 +27,15 @@ code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
 def main():
     print('\n', 'welcome to vngol wmd benchmarks'.upper(), '\n')
 
-    repetitions = (20, 1000000)
+    repetitions = (7, 10000)
 
     t_bincount = min(timeit.Timer(
-        'wmd.hamming_bincount', setup=setup
+        'wmd.hamming_bincount(code1, code2)', setup=setup
     ).repeat(*repetitions))
     print('bincount time', t_bincount)
 
     t_bitmask = min(timeit.Timer(
-        'wmd.hamming_bitmask', setup=setup
+        'wmd.hamming_bitmask(code1, code2)', setup=setup
     ).repeat(*repetitions))
     print('bitmask time:', t_bitmask)
 
