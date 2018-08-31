@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 
-import h5py
+from ungol.models import embcodr
+
 import numpy as np
 from tqdm import tqdm as _tqdm
 from tabulate import tabulate
@@ -102,20 +103,6 @@ def _load_vocabulary(fname: str) -> Dict[str, int]:
     return vocab
 
 
-def _load_codes(fname: str, bits: int, words: int) -> np.ndarray:
-    with open(fname, 'rb') as fd:
-        buf = fd.read()
-
-    raw = np.frombuffer(buf, dtype=np.uint8)
-    codes = raw.reshape(-1, bits // 8)
-
-    print('read {} codes'.format(len(codes)))
-    assert words == codes.shape[0], 'words=({}) =/= codes({})'.format(
-        words, codes.shape[0])
-
-    return codes
-
-
 def _map_to_codes(
         words: List[str],
         vocab: Dict[str, int],
@@ -125,47 +112,41 @@ def _map_to_codes(
     return np.vstack(mapping)
 
 
-def __print_doc(tokens, vocab, codes, __ranges):
+def __print_doc(tokens, vocab, codes):
     print('document of length: {}'.format(len(tokens)))
 
     tab_data = []
     header = ('word', 'index', 'code sum', 'knn start', 'knn end')
 
+    # FIXME knn start, knn end
+
     for token, code in zip(tokens, codes):
         assert code.shape[0] == codes.shape[1]
 
         idx = vocab[token]
-        tab_data.append((token, idx, code.sum(),
-                         __ranges[0][idx], __ranges[1][idx]))
+        tab_data.append((token, idx, code.sum(), ))
 
     print('\n', tabulate(tab_data, headers=header), '\n')
 
 
 def main(args):
     print('\n', 'welcome to vngol wmd'.upper(), '\n')
+    print('please note: binary data loaded is not checked for malicious')
+    print('content - never load anything you did not produce!')
 
     tokens1 = 'hallo', 'welt', 'wie', 'gehen'
     tokens2 = 'moin', 'ich', 'laufe', 'gern', 'kühlschrank'
 
     vocab = _load_vocabulary(args.vocabulary)
-    codes = _load_codes(args.codes, args.bits, len(vocab))
+    codes = embcodr.load_codes_bin(args.codes)
 
     assert len(vocab) == codes.shape[0]
-
-    # --- tmp
-
-    print('__loading ranges')
-    __KNN = 50
-    __fd = h5py.File(args.knn, 'r')
-    __ranges = __fd['dists'][:, 1], __fd['dists'][:, __KNN]
-
-    # ---
 
     doc1 = _map_to_codes(tokens1, vocab, codes)
     doc2 = _map_to_codes(tokens2, vocab, codes)
 
-    __print_doc(tokens1, vocab, doc1, __ranges)
-    __print_doc(tokens2, vocab, doc2, __ranges)
+    __print_doc(tokens1, vocab, doc1)
+    __print_doc(tokens2, vocab, doc2)
 
     assert doc1.shape[0] == len(doc1)
     assert doc2.shape[0] == len(doc2)
@@ -181,19 +162,8 @@ def parse_args():
         help='binary code file produced by ungol-models/ungol.embcodr', )
 
     parser.add_argument(
-        'bits', type=int,
-        help='how many bits the codes have', )
-
-    parser.add_argument(
         'vocabulary', type=str,
         help='pickle produced by ungol-models/ungol.analyze.vocabulary', )
-
-    # This file is included temporarily to play around with
-    # thresholding/weighting by distance. It may be included in the
-    # binary code file at some later point.
-    parser.add_argument(
-        'knn', type=str,
-        help='knn file TEMPORARY!')
 
     return parser.parse_args()
 
