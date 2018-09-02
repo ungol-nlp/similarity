@@ -32,8 +32,16 @@ class Doc:
     codes: np.ndarray = attr.ib()  # (n, bytes)
     dists: np.ndarray = attr.ib()  # (n, knn)
 
+    def __len__(self) -> int:
+        return len(self.tokens)
+
     def __getitem__(self, key):
         return self.codes[key], self.dists[key]
+
+    def __attrs_post_init__(self):
+        assert len(self.tokens) == self.codes.shape[0]
+        assert len(self.tokens) == self.dists.shape[0]
+
 
 # ---
 
@@ -68,17 +76,39 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
     return dist
 
 
-def _norm_dist(hamming_dist, maxdist):
-    dist = min(hamming_dist, maxdist)
-    normed = dist / maxdist
-
-    assert 0 <= normed and normed <= 1
-    return normed
+# ---
 
 
-def transport_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
+def __print_distance_matrix(T, doc1, doc2):
+
+    # doc1: rows, doc2: columns
+    tab_data = [('', ) + tuple(doc2.tokens)]
+    for idx in range(len(doc1)):
+        word = (doc1.tokens[idx], )
+        dists = tuple(T[idx])
+        tab_data.append(word + dists)
+
+    print(tabulate(tab_data))
+
+
+def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
+
+    def _norm_dist(hamming_dist, c_bits: int, maxdist: int = None):
+        # clip too large distance
+        dist = min(hamming_dist, maxdist)
+
+        # normalize
+        normed = dist / min(c_bits, maxdist)
+
+        assert 0 <= normed and normed <= 1
+        return normed
+
+    # ---
+
     n1, n2 = doc1.codes.shape[0], doc2.codes.shape[0]
     T = np.zeros((n1, n2))
+
+    c_bits = doc1.codes.shape[1] * 8
 
     # target matrix is of shape (n1, n2) -> build
     # a meshgrid for all possible index combinations
@@ -92,11 +122,13 @@ def transport_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
             c2, d2 = doc2[j]
 
             hamming_dist = hamming_bincount(c1, c2)
-            normed = _norm_dist(hamming_dist, 100)
-
+            normed = _norm_dist(hamming_dist, c_bits, 100)
             T[i][j] = normed
 
     return T
+
+
+# ---
 
 
 def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
@@ -110,7 +142,7 @@ def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
 
 
 def dist(doc1: Doc, doc2: Doc) -> float:
-    T = transport_matrix_loop(doc1, doc2)
+    T = distance_matrix_loop(doc1, doc2)
 
     doc1_idx = np.argmin(T, axis=1)
     doc2_idx = np.argmin(T, axis=0)
