@@ -107,12 +107,7 @@ def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
     n1, n2 = doc1.codes.shape[0], doc2.codes.shape[0]
     T = np.zeros((n1, n2))
-
     c_bits = doc1.codes.shape[1] * 8
-
-    # target matrix is of shape (n1, n2) -> build
-    # a meshgrid for all possible index combinations
-    # grid: '(n1, n2)' = np.meshgrid(np.arange(n1), np.arange(n2))
 
     # compute distance for every possible combination of words
     for i in range(n1):
@@ -127,6 +122,34 @@ def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
     return T
 
+
+# dmv: distance matrix vectorized
+
+
+def _dmv_count_ones(x):
+    return bin(x).count('1')
+
+
+_DMV_MESHGRID_SIZE = int(1e4)
+_dmv_meshgrid = np.meshgrid(
+    np.arange(_DMV_MESHGRID_SIZE),
+    np.arange(_DMV_MESHGRID_SIZE), )
+
+
+_dmv_vectorized_bincount = np.vectorize(_dmv_count_ones)
+
+
+def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
+
+    idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
+    idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
+
+    # FIXME: why is there a second array returned?
+    C1 = doc1[idx_x][0]
+    C2 = doc2[idx_y][0]
+
+    T = _dmv_vectorized_bincount(C1 ^ C2).sum(axis=-1)
+    return T / (doc1.codes.shape[1] * 8)
 
 # ---
 
