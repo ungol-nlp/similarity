@@ -115,6 +115,11 @@ def test_distance_matrix_loop():
     _distance_matrix_test(fn)
 
 
+def test_distance_matrix_vectorized():
+    fn = wmd.distance_matrix_vectorized
+    _distance_matrix_test(fn)
+
+
 if __name__ == '__main__':
     # for temporary stuff
-    _distance_matrix_test(wmd.distance_matrix_loop)
+    pass
