@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import timeit
+import argparse
 
 
 # Use the min() rather than the average of the timings. That is a
@@ -38,6 +39,20 @@ def main():
         'wmd.hamming_bitmask(code1, code2)', setup=setup
     ).repeat(*repetitions))
     print('bitmask time:', t_bitmask)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '--all', action='store_true',
+        help='run all tests')
+
+    parser.add_argument(
+        '--hamming-distance', action='store_true',
+        help='run tests for hamming distance calculations')
+
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
