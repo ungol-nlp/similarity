@@ -53,6 +53,13 @@ def test_hamming_bitmask():
     _hamming_test_combinations(fn)
 
 
+def test_hamming_lookup():
+    fn = wmd.hamming_lookup
+    _hamming_test_min(fn)
+    _hamming_test_max(fn)
+    _hamming_test_combinations(fn)
+
+
 # ---
 
 
@@ -117,6 +124,11 @@ def test_distance_matrix_loop():
 
 def test_distance_matrix_vectorized():
     fn = wmd.distance_matrix_vectorized
+    _distance_matrix_test(fn)
+
+
+def test_distance_matrix_lookup():
+    fn = wmd.distance_matrix_lookup
     _distance_matrix_test(fn)
 
 
