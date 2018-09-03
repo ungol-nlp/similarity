@@ -15,7 +15,6 @@ import functools
 
 from typing import Dict
 from typing import List
-from typing import Tuple
 
 
 # ---
@@ -34,6 +33,7 @@ def bincount(x: int):
 @attr.s
 class Doc:
 
+    name:         str = attr.ib()
     tokens: List[str] = attr.ib()  # (n, )
     codes: np.ndarray = attr.ib()  # (n, bytes)
     dists: np.ndarray = attr.ib()  # (n, knn)
@@ -47,6 +47,26 @@ class Doc:
     def __attrs_post_init__(self):
         assert len(self.tokens) == self.codes.shape[0]
         assert len(self.tokens) == self.dists.shape[0]
+
+    @staticmethod
+    def create(
+            name: str,
+            content: str,
+            vocab: Dict[str, int],
+            codemap: np.ndarray,
+            distmap: np.ndarray, ):
+
+        words = content.split(' ')
+        filtered = [word for word in words if word in vocab]
+
+        tokens = [token.lower().strip() for token in filtered]
+        selection = [vocab[token] for token in tokens]
+
+        return Doc(
+            name=name,
+            tokens=tokens,
+            codes=codemap[selection],
+            dists=distmap[selection], )
 
 
 # ---
@@ -202,8 +222,9 @@ def dist(doc1: Doc, doc2: Doc) -> float:
     doc2_dists = T.T[np.arange(T.shape[1]), doc2_idx]
 
     print('\nhamming distances:'.upper())
-    __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
-    __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
+    if VERBOSE:
+        __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
+        __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
 
     score = max(doc1_dists.mean(), doc2_dists.mean())
     return score
@@ -216,20 +237,6 @@ def _load_vocabulary(fname: str) -> Dict[str, int]:
     assert len(vocab)
     print('read vocabulary')
     return vocab
-
-
-def _map_to_codes(
-        tokens: List[str],
-        vocab: Dict[str, int],
-        codes: np.array,
-        dists: np.array) -> Tuple['codes', 'dists']:
-
-    selection = [vocab[token] for token in tokens]
-
-    return Doc(
-        tokens=tokens,
-        codes=codes[selection],
-        dists=dists[selection], )
 
 
 def __print_doc(doc, vocab, meta):
@@ -251,6 +258,31 @@ def __print_doc(doc, vocab, meta):
     print('\n', tabulate(tab_data, headers=header), '\n')
 
 
+def _gen_combinations(pool: List[Doc]):
+    for i in range(len(pool)):
+        for doc in pool[i:]:
+            yield pool[i], doc
+
+
+def calculate_distances(vocab, codemap, distmap, meta):
+
+    docs = []
+    for fname in args.docs:
+        with open(fname, 'r') as fd:
+            doc = Doc.create(fd.name, fd.read(), vocab, codemap, distmap)
+            docs.append(doc)
+
+        if VERBOSE:
+            print('\nloaded document:'.upper(), doc)
+            for doc in docs:
+                __print_doc(doc, vocab, meta)
+
+    for doc1, doc2 in _gen_combinations(docs):
+        score = dist(doc1, doc2)
+        print('\nscore: {}'.format(score))
+        break
+
+
 def main(args):
     global VERBOSE
     VERBOSE = args.verbose
@@ -260,35 +292,22 @@ def main(args):
     print('content - never load anything you did not produce!\n')
 
     vocab = _load_vocabulary(args.vocabulary)
-    meta, dists, codes = embcodr.load_codes_bin(args.codes)
+    meta, distmap, codemap = embcodr.load_codes_bin(args.codemap)
 
     assert 'knn' in meta
-    assert len(vocab) == dists.shape[0]
-    assert len(vocab) == codes.shape[0]
+    assert len(vocab) == distmap.shape[0]
+    assert len(vocab) == codemap.shape[0]
 
-    docs = []
-    for doc in args.docs:
-        pass  # FIXME
+    assert args.docs, 'no documents provided'
 
-    assert len(docs), 'no documents provided'
-
-    # doc1 = _map_to_codes(tokens1, vocab, codes, dists)
-    # doc2 = _map_to_codes(tokens2, vocab, codes, dists)
-
-    if VERBOSE:
-        print('\ndocuments:'.upper())
-        for doc in docs:
-            __print_doc(doc, vocab, meta)
-
-    # score = dist(doc1, doc2)
-    # print('\nscore: {}'.format(score))
+    calculate_distances(vocab, codemap, distmap, meta)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        'codes', type=str,
+        'codemap', type=str,
         help='binary code file produced by ungol-models/ungol.embcodr', )
 
     parser.add_argument(
@@ -296,7 +315,7 @@ def parse_args():
         help='pickle produced by ungol-models/ungol.analyze.vocabulary', )
 
     parser.add_argument(
-        '--docs', type=str,
+        '--docs', type=str, nargs='+',
         help='documents to compare'
     )
 
