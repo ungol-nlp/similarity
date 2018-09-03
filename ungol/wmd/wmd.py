@@ -25,6 +25,12 @@ tqdm = functools.partial(_tqdm, ncols=80)
 # ---
 
 
+def bincount(x: int):
+    return bin(x).count('1')
+
+# ---
+
+
 @attr.s
 class Doc:
 
@@ -57,7 +63,7 @@ def hamming_bincount(code1: '(bits, )', code2: '(bits, )') -> int:
 
     dist = 0
     for char in code1 ^ code2:
-        dist += bin(char).count('1')
+        dist += bincount(char)
 
     return dist
 
@@ -75,6 +81,13 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
 
     return dist
 
+
+_hamming_lookup = np.array([bincount(x) for x in range(0x100)])
+
+
+def hamming_lookup(code1: '(bits, )', code2: '(bits, )') -> int:
+    _assert_hamming_input(code1, code2)
+    return _hamming_lookup[code1 ^ code2].sum()
 
 # ---
 
@@ -126,17 +139,13 @@ def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 # dmv: distance matrix vectorized
 
 
-def _dmv_count_ones(x):
-    return bin(x).count('1')
-
-
 _DMV_MESHGRID_SIZE = int(1e4)
 _dmv_meshgrid = np.meshgrid(
     np.arange(_DMV_MESHGRID_SIZE),
     np.arange(_DMV_MESHGRID_SIZE), )
 
 
-_dmv_vectorized_bincount = np.vectorize(_dmv_count_ones)
+_dmv_vectorized_bincount = np.vectorize(lambda x: bin(x).count('1'))
 
 
 def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
@@ -150,6 +159,20 @@ def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
     T = _dmv_vectorized_bincount(C1 ^ C2).sum(axis=-1)
     return T / (doc1.codes.shape[1] * 8)
+
+
+def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
+
+    idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
+    idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
+
+    # FIXME: why is there a second array returned?
+    C1 = doc1[idx_x][0]
+    C2 = doc2[idx_y][0]
+
+    T = _hamming_lookup[C1 ^ C2].sum(axis=-1)
+    return T / (doc1.codes.shape[1] * 8)
+
 
 # ---
 
@@ -165,7 +188,7 @@ def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
 
 
 def dist(doc1: Doc, doc2: Doc) -> float:
-    T = distance_matrix_loop(doc1, doc2)
+    T = distance_matrix_lookup(doc1, doc2)
 
     doc1_idx = np.argmin(T, axis=1)
     doc2_idx = np.argmin(T, axis=0)
@@ -209,18 +232,17 @@ def _map_to_codes(
         dists=dists[selection], )
 
 
-def __print_doc(tokens, vocab, meta, doc):
-    print('\ndocument of length: {}'.format(len(tokens)))
+def __print_doc(doc, vocab, meta):
+    print('\ndocument of length: {}'.format(len(doc)))
 
     tab_data = []
 
     header_knn = tuple('{}-nn'.format(k) for k in meta['knn'])
     header = ('word', 'index', 'code sum', ) + header_knn
 
-    assert doc.codes.shape[0] == len(tokens)
     assert doc.codes.shape[0] == doc.dists.shape[0]
 
-    for token, code, dist in zip(tokens, doc.codes, doc.dists):
+    for token, code, dist in zip(doc.tokens, doc.codes, doc.dists):
         assert code.shape[0] == doc.codes.shape[1]
 
         idx = vocab[token]
@@ -230,12 +252,12 @@ def __print_doc(tokens, vocab, meta, doc):
 
 
 def main(args):
+    global VERBOSE
+    VERBOSE = args.verbose
+
     print('\n', 'welcome to vngol wmd'.upper(), '\n')
     print('please note: binary data loaded is not checked for malicious')
     print('content - never load anything you did not produce!\n')
-
-    tokens1 = 'hallo', 'welt', 'wie', 'gehen'
-    tokens2 = 'moin', 'ich', 'laufe', 'gern', 'kühlschrank'
 
     vocab = _load_vocabulary(args.vocabulary)
     meta, dists, codes = embcodr.load_codes_bin(args.codes)
@@ -244,15 +266,22 @@ def main(args):
     assert len(vocab) == dists.shape[0]
     assert len(vocab) == codes.shape[0]
 
-    doc1 = _map_to_codes(tokens1, vocab, codes, dists)
-    doc2 = _map_to_codes(tokens2, vocab, codes, dists)
+    docs = []
+    for doc in args.docs:
+        pass  # FIXME
 
-    print('\ndocuments:'.upper())
-    __print_doc(tokens1, vocab, meta, doc1)
-    __print_doc(tokens2, vocab, meta, doc2)
+    assert len(docs), 'no documents provided'
 
-    score = dist(doc1, doc2)
-    print('\nscore: {}'.format(score))
+    # doc1 = _map_to_codes(tokens1, vocab, codes, dists)
+    # doc2 = _map_to_codes(tokens2, vocab, codes, dists)
+
+    if VERBOSE:
+        print('\ndocuments:'.upper())
+        for doc in docs:
+            __print_doc(doc, vocab, meta)
+
+    # score = dist(doc1, doc2)
+    # print('\nscore: {}'.format(score))
 
 
 def parse_args():
@@ -265,6 +294,16 @@ def parse_args():
     parser.add_argument(
         'vocabulary', type=str,
         help='pickle produced by ungol-models/ungol.analyze.vocabulary', )
+
+    parser.add_argument(
+        '--docs', type=str,
+        help='documents to compare'
+    )
+
+    parser.add_argument(
+        '-v', '--verbose', action='store_true',
+        help='verbose output with tables and such'
+    )
 
     return parser.parse_args()
 

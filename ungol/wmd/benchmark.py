@@ -4,8 +4,10 @@
 
 from tabulate import tabulate
 
+import os
 import timeit
 import argparse
+import multiprocessing as mp
 from datetime import datetime
 
 from typing import List
@@ -13,29 +15,22 @@ from typing import Tuple
 from typing import Callable
 
 
-# Use the min() rather than the average of the timings. That is a
-# recommendation from me, from Tim Peters, and from Guido van
-# Rossum. The fastest time represents the best an algorithm can
-# perform when the caches are loaded and the system isn't busy with
-# other tasks. All the timings are noisy -- the fastest time is the
-# least noisy. It is easy to show that the fastest timings are the
-# most reproducible and therefore the most useful when timing two
-# different implementations. – Raymond Hettinger Apr 3 '12
-
-
 # timeit options
-REPS = (5, 1000)
+REPS = (7, 10000)
 
 # ---
 
 
 def ts(info: str) -> Callable[[None], None]:
-    tstart = datetime.now()
-    print('running: {} - '.format(info), end='')
+    pid = os.getpid()
 
-    def _done(*args, **kwargs):
-        tdelta = (datetime.now() - tstart).total_seconds()
-        print('took: {delta}ms'.format(*args, delta=tdelta, **kwargs))
+    tstart = datetime.now()
+    print('[{}] running: {}'.format(pid, info))
+
+    def _done():
+        tdelta = (datetime.now() - tstart).total_seconds() * 1000
+        print('[{pid}] {info} took: {:.3f}ms'.format(
+            tdelta, info=info, pid=pid))
 
     return _done
 
@@ -52,14 +47,21 @@ def _run(info: str, cmd: str, setup: str):
     return info, res
 
 
+def _run_worker(args):
+    return _run(*args)
+
+
 def _benchmark(title: str, tasks: List[Tuple[str]]):
 
     fmt = 'running {} benchmark ({} times, {} iterations)'
     print(fmt.format(title, *REPS))
-    tab_data = []
 
-    for args in tasks:
-        tab_data.append(_run(*args))
+    assert all(len(args) == 3 for args in tasks)
+    with mp.Pool() as pool:
+        tab_data = pool.map(_run_worker, tasks)
+
+    # for args in tasks:
+    #     tab_data.append(_run(*args))
 
     tab_data.sort(key=lambda t: t[1])
     print('\n', tabulate(tab_data, headers=('name', 'time')), '\n')
@@ -93,7 +95,11 @@ code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
 
         ('bitshifts with vanilla python',
          'wmd.hamming_bitmask(code1, code2)',
-         setup, )
+         setup, ),
+
+        ('lookup table',
+         'wmd.hamming_lookup(code1, code2)',
+         setup, ),
 
     ])
 
@@ -115,17 +121,21 @@ codes = (np.random.randn(n_max, byte_c) * 255).astype(dtype=np.uint8)
 dists = (np.random.randn(n_max, 4) * 255).astype(dtype=np.uint8)
 '''
 
-    benchmarks = []
-    for n in 10, 20, 30, 40, 50:
-        doc_init = '''
+    def gen_setup(*sizes: int):
+        for n in sizes:
+            doc_init = '''
 doc = wmd.Doc(
     tokens=tokens[:{n}],
     codes=codes[:{n}],
     dists=dists[:{n}], )
 '''.format(n=n)
 
-        setup = init + doc_init
-        benchmarks.append(
+            setup = init + doc_init
+            yield n, setup
+
+    benchmarks = []
+    for n, setup in gen_setup(10, 20, 30, 40, 50, 100):
+        benchmarks += [
 
             ('naive loop ({n} x {n})'.format(n=n),
              'wmd.distance_matrix_loop(doc, doc)',
@@ -135,7 +145,20 @@ doc = wmd.Doc(
              'wmd.distance_matrix_vectorized(doc, doc)',
              setup, ),
 
-        )
+            ('numpy with lookup table ({n} x {n})'.format(n=n),
+             'wmd.distance_matrix_lookup(doc, doc)',
+             setup, ),
+
+        ]
+
+    for n, setup in gen_setup(500, 1000, 5000):
+        benchmarks += [
+
+            ('numpy with lookup table ({n} x {n})'.format(n=n),
+             'wmd.distance_matrix_lookup(doc, doc)',
+             setup, ),
+
+        ]
 
     _benchmark('distance matrix', benchmarks)
 
