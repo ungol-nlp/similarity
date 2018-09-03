@@ -10,9 +10,12 @@ from tqdm import tqdm as _tqdm
 from tabulate import tabulate
 
 import pickle
+import pathlib
 import argparse
 import functools
 
+from typing import Set
+from typing import Any
 from typing import Dict
 from typing import List
 
@@ -33,10 +36,15 @@ def bincount(x: int):
 @attr.s
 class Doc:
 
-    name:         str = attr.ib()
+    name: str = attr.ib()
+
+    # see ungol.models.embcodr.load_codes_bin for meta
+    meta:  Dict[str, Any] = attr.ib()
+    vocab: Dict[str, int] = attr.ib()
+
     tokens: List[str] = attr.ib()  # (n, )
-    codes: np.ndarray = attr.ib()  # (n, bytes)
-    dists: np.ndarray = attr.ib()  # (n, knn)
+    codes: np.ndarray = attr.ib()  # (n, bytes); np.uint8
+    dists: np.ndarray = attr.ib()  # (n, knn);   np.uint8
 
     def __len__(self) -> int:
         return len(self.tokens)
@@ -48,22 +56,59 @@ class Doc:
         assert len(self.tokens) == self.codes.shape[0]
         assert len(self.tokens) == self.dists.shape[0]
 
+    def __str__(self):
+        str_buf = ['\ndocument of length: {}'.format(len(self))]
+        tab_data = []
+
+        header_knn = tuple('{}-nn'.format(k) for k in self.meta['knn'])
+        header = ('word', 'index', 'code sum', ) + header_knn
+
+        assert self.codes.shape[0] == self.dists.shape[0]
+
+        for token, code, dist in zip(self.tokens, self.codes, self.dists):
+            assert code.shape[0] == self.codes.shape[1]
+
+            idx = self.vocab[token]
+            tab_data.append((token, idx, code.sum()) + tuple(dist))
+
+        str_buf += [tabulate(tab_data, headers=header)]
+        return '\n'.join(str_buf)
+
     @staticmethod
     def create(
             name: str,
-            content: str,
-            vocab: Dict[str, int],
-            codemap: np.ndarray,
-            distmap: np.ndarray, ):
+            f_content: str,
+            f_codemap: str,
+            f_vocab: str,
+            stopwords: Set[str] = None):
 
-        words = content.split(' ')
-        filtered = [word for word in words if word in vocab]
+        meta, distmap, codemap = embcodr.load_codes_bin(f_codemap)
+
+        with open(f_vocab, 'rb') as fd:
+            vocab = pickle.load(fd)
+
+        assert len(vocab)
+        assert 'knn' in meta
+        assert len(vocab) == distmap.shape[0]
+        assert len(vocab) == codemap.shape[0]
+
+        if stopwords is None:
+            stopwords = set()
+
+        with open(f_content, 'r') as fd:
+            words = fd.read().split(' ')
+
+        filtered = [word for word in words if all([
+            word in vocab,
+            word not in stopwords])]
 
         tokens = [token.lower().strip() for token in filtered]
         selection = [vocab[token] for token in tokens]
 
         return Doc(
             name=name,
+            meta=meta,
+            vocab=vocab,
             tokens=tokens,
             codes=codemap[selection],
             dists=distmap[selection], )
@@ -230,57 +275,60 @@ def dist(doc1: Doc, doc2: Doc) -> float:
     return score
 
 
-def _load_vocabulary(fname: str) -> Dict[str, int]:
-    with open(fname, 'rb') as fd:
-        vocab = pickle.load(fd)
-
-    assert len(vocab)
-    print('read vocabulary')
-    return vocab
-
-
-def __print_doc(doc, vocab, meta):
-    print('\ndocument of length: {}'.format(len(doc)))
-
-    tab_data = []
-
-    header_knn = tuple('{}-nn'.format(k) for k in meta['knn'])
-    header = ('word', 'index', 'code sum', ) + header_knn
-
-    assert doc.codes.shape[0] == doc.dists.shape[0]
-
-    for token, code, dist in zip(doc.tokens, doc.codes, doc.dists):
-        assert code.shape[0] == doc.codes.shape[1]
-
-        idx = vocab[token]
-        tab_data.append((token, idx, code.sum()) + tuple(dist))
-
-    print('\n', tabulate(tab_data, headers=header), '\n')
-
-
 def _gen_combinations(pool: List[Doc]):
     for i in range(len(pool)):
         for doc in pool[i:]:
             yield pool[i], doc
 
 
-def calculate_distances(vocab, codemap, distmap, meta):
+def calculate_distances(
+        f_codemap: str,
+        f_vocab: str,
+        f_docs: List[str],
+        stopwords: Set[str] = None):
 
-    docs = []
-    for fname in args.docs:
-        with open(fname, 'r') as fd:
-            doc = Doc.create(fd.name, fd.read(), vocab, codemap, distmap)
-            docs.append(doc)
+    doc_paths = [pathlib.Path(fname) for fname in f_docs]
+    argv, kwargv = (f_codemap, f_vocab), dict(stopwords=stopwords)
+
+    docs: List[Doc] = []
+    for path in doc_paths:
+        doc = Doc.create(path.name, str(path), *argv, **kwargv)
+        docs.append(doc)
 
         if VERBOSE:
             print('\nloaded document:'.upper(), doc)
-            for doc in docs:
-                __print_doc(doc, vocab, meta)
+            print(str(doc))
 
-    for doc1, doc2 in _gen_combinations(docs):
-        score = dist(doc1, doc2)
-        print('\nscore: {}'.format(score))
-        break
+    # for doc1, doc2 in _gen_combinations(docs):
+    #     score = dist(doc1, doc2)
+    #     print('\nscore: {}'.format(score))
+    #     break
+
+
+def _load_stopwords(f_stopwords: List[str]):
+    stopwords: Set[str] = set()
+
+    def clean_line(raw: str) -> str:
+        return raw.strip()
+
+    def filter_line(token: str) -> bool:
+        cond = any((
+            len(token) == 0,
+            token.startswith(';'),
+            token.startswith('#'), ))
+
+        return not cond
+
+    for fname in f_stopwords:
+        with open(fname, 'r') as fd:
+            raw = fd.readlines()
+
+        stopwords |= set(filter(filter_line, map(clean_line, raw)))
+
+    if VERBOSE:
+        print('loaded {} stopwords'.format(len(stopwords)))
+
+    return stopwords
 
 
 def main(args):
@@ -291,16 +339,9 @@ def main(args):
     print('please note: binary data loaded is not checked for malicious')
     print('content - never load anything you did not produce!\n')
 
-    vocab = _load_vocabulary(args.vocabulary)
-    meta, distmap, codemap = embcodr.load_codes_bin(args.codemap)
-
-    assert 'knn' in meta
-    assert len(vocab) == distmap.shape[0]
-    assert len(vocab) == codemap.shape[0]
-
-    assert args.docs, 'no documents provided'
-
-    calculate_distances(vocab, codemap, distmap, meta)
+    stopwords = _load_stopwords(args.stopwords)
+    calculate_distances(args.codemap, args.vocabulary, args.docs,
+                        stopwords=stopwords)
 
 
 def parse_args():
@@ -319,9 +360,16 @@ def parse_args():
         help='documents to compare'
     )
 
+    # optional
+
     parser.add_argument(
         '-v', '--verbose', action='store_true',
         help='verbose output with tables and such'
+    )
+
+    parser.add_argument(
+        '-s', '--stopwords', nargs='*',
+        help='lists of words to ignore'
     )
 
     return parser.parse_args()
