@@ -35,8 +35,12 @@ def ts(info: str) -> Callable[[None], None]:
     return _done
 
 
-def _timeit(cmd: str, setup: str):
-    return min(timeit.Timer(cmd, setup=setup).repeat(*REPS))
+def _timeit(cmd: str, setup: str) -> float:
+    """
+    Returns the best runs time in miliseconds
+    """
+    agg_time = min(timeit.Timer(cmd, setup=setup).repeat(*REPS))
+    return agg_time / REPS[1] * 1000
 
 
 def _run(info: str, cmd: str, setup: str):
