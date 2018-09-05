@@ -10,7 +10,6 @@ Play around with wmd.py from the command line
 from ungol.wmd import wmd
 
 import attr
-import numpy as np
 from tabulate import tabulate
 
 import pickle
@@ -48,7 +47,7 @@ class Stats:
 
         names = self.doc1.name, self.doc2.name
         a('comparing "{}" with "{}"'.format(*names))
-        a('  - overall score: {}'.format(self.score))
+        a('  - overall score: {}'.format(self.score.value))
         a('  - doc1 length: {}'.format(len(self.doc1.idx)))
         a('  - doc2 length: {}'.format(len(self.doc2.idx)))
         sbuf += hline
@@ -127,7 +126,6 @@ def _calculate_distances(query: wmd.Doc, docs: List[wmd.Doc]) -> Stats:
 
         # --- gather stats
 
-        # FIXME: Stats using wmd.Score
         stat = Stats(
             doc1=doc1, doc2=doc2,
             score=score, delta=dist_delta(), )
@@ -135,7 +133,6 @@ def _calculate_distances(query: wmd.Doc, docs: List[wmd.Doc]) -> Stats:
         stats.append(stat)
 
     print('computation took {:.3f}ms\n'.format(delta()))
-
     stats.sort(key=lambda s: s.score, reverse=True)
     return stats
 
@@ -154,7 +151,8 @@ def main(args):
     # not using the narrative because it usually enumerates
     # whats _not_ to be retrieved... (maybe this can be used)
     with open(args.query, 'r') as fd:
-        title, desc, narrative = fd.read().split('\n\n')
+        res = fd.read().split('\n\n')
+        title, desc, narrative = res
         query = wmd.Doc.from_text(title, desc, refs)
 
     docs = []
@@ -165,7 +163,7 @@ def main(args):
     stats = _calculate_distances(query, docs)
 
     print(tabulate(
-        [(s.doc1.name, s.doc2.name, s.score) for s in stats],
+        [(s.doc1.name, s.doc2.name, s.score.value) for s in stats],
         headers=('doc1', 'doc2', 'score'), ))
 
     for stat in stats:

@@ -361,6 +361,9 @@ class Score:
     doc1_dists: np.array = attr.ib()  # (l1, )
     doc2_dists: np.array = attr.ib()  # (l2, )
 
+    doc1_raw_mean: float = attr.ib()
+    doc2_raw_mean: float = attr.ib()
+
     doc1_mean: float = attr.ib()
     doc2_mean: float = attr.ib()
 
@@ -382,16 +385,19 @@ class Score:
 
         # doc1 / doc2
 
-        sbuf.append('\ncomparing "{}" to "{}" [mean score: {}]'.format(
-            self.doc1.name, self.doc2.name, self.doc1_mean))
+        fmt = '\ncomparing "{}" to "{}" [mean raw {:.3f}, weighted: {:.3f}]'
+        sbuf.append(fmt.format(
+            self.doc1.name, self.doc2.name,
+            self.doc1_raw_mean, self.doc2_mean))
 
         sbuf.append(self._str_hamming_nn(
             self.doc1, self.doc2, self.doc1_idx, self.doc1_dists))
 
         # doc2 / doc1
 
-        sbuf.append('\ncomparing "{}" to "{}" [mean score: {}]'.format(
-            self.doc2.name, self.doc1.name, self.doc2_mean))
+        sbuf.append(fmt.format(
+            self.doc2.name, self.doc1.name,
+            self.doc2_raw_mean, self.doc2_mean))
 
         sbuf.append(self._str_hamming_nn(
             self.doc2, self.doc1, self.doc2_idx, self.doc2_dists))
@@ -400,7 +406,7 @@ class Score:
 
 
 def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
-    # FIXME assert correct dimensions in every step!
+
     # compute the distance matrix
     T = distance_matrix_lookup(doc1, doc2)
 
@@ -409,17 +415,9 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
 
     l1, l2 = T.shape
 
-    # weight the distance matrix by term frequency per document
-    # and select the minimum distances per document
-    W1 = doc1.cnt.repeat(l2).reshape(l1, l2)
-    W2 = doc2.cnt.repeat(l1).reshape(l2, l1)
-
-    assert W1.shape[0] == l1 and W1.shape[1] == l2
-    assert W2.shape[0] == l2 and W2.shape[1] == l1
-
-    # weigh each distance by relative term frequency
-    doc1_idx = np.argmin(T * W1, axis=1)
-    doc2_idx = np.argmin(T.T * W2, axis=1)
+    # weight each distance by relative term frequency
+    doc1_idx = np.argmin(T, axis=1)
+    doc2_idx = np.argmin(T.T, axis=1)
 
     assert len(doc1_idx.shape) == 1
     assert len(doc2_idx.shape) == 1
@@ -438,8 +436,12 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
     assert doc1_dists.shape[0] == l1
     assert doc2.dists.shape[0] == l2
 
-    doc1_mean = doc1_dists.mean()
-    doc2_mean = doc2_dists.mean()
+    doc1_raw_mean = doc1_dists.mean()
+    doc2_raw_mean = doc2_dists.mean()
+
+    # weight by term frequency
+    doc1_mean = (doc1_dists * doc1.cnt).sum()
+    doc2_mean = (doc2_dists * doc2.cnt).sum()
 
     score = max(doc1_mean, doc2_mean)
 
@@ -449,6 +451,7 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
         return Score(
             value=score, T=T,
             doc1=doc1, doc2=doc2,
+            doc1_raw_mean=doc1_raw_mean, doc2_raw_mean=doc2_raw_mean,
             doc1_mean=doc1_mean, doc2_mean=doc2_mean,
             doc1_idx=doc1_idx, doc2_idx=doc2_idx,
             doc1_dists=doc1_dists, doc2_dists=doc2_dists, )
