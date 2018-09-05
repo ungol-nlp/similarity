@@ -5,6 +5,7 @@ sphinx
 
 tqdm
 h5py
+nltk
 attrs
 numpy
 torchvision
