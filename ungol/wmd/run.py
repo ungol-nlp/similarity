@@ -39,9 +39,7 @@ class Stats:
     score: float = attr.ib()
     delta: float = attr.ib()
 
-    T: np.array = attr.ib()  # (n1, n2)
-    doc1_dists: np.array = attr.ib()  # (n1, )
-    doc2_dists: np.array = attr.ib()  # (n2, )
+    score: wmd.Score = attr.ib()
 
     def __str__(self) -> str:
         sbuf = ['\n']
@@ -55,6 +53,8 @@ class Stats:
         a('  - doc2 length: {}'.format(len(self.doc2.idx)))
         sbuf += hline
 
+        # add document information
+
         a('doc1: {}'.format(self.doc1.name))
         a(str(self.doc1))
         sbuf += hline
@@ -63,8 +63,9 @@ class Stats:
         a(str(self.doc2))
         sbuf += hline
 
-        # FIXME print matrices
-        # FIXME print nn per document
+        # print (R)WMD calculation details
+
+        a(str(self.score))
 
         return '\n'.join(sbuf) + '\n'
 
@@ -122,15 +123,14 @@ def _calculate_distances(query: wmd.Doc, docs: List[wmd.Doc]) -> Stats:
 
         # --- critical section
 
-        res = wmd.dist(doc1, doc2, verbose=True)
-        score, T, doc1_dists, doc2_dists = res
+        score: wmd.Score = wmd.dist(doc1, doc2, verbose=True)
 
         # --- gather stats
 
+        # FIXME: Stats using wmd.Score
         stat = Stats(
             doc1=doc1, doc2=doc2,
-            score=score, delta=dist_delta(),
-            T=T, doc1_dists=doc1_dists, doc2_dists=doc2_dists)
+            score=score, delta=dist_delta(), )
 
         stats.append(stat)
 
@@ -151,6 +151,8 @@ def main(args):
     refs = wmd.DocReferences.from_files(
         args.codemap, args.vocabulary, args.stopwords)
 
+    # not using the narrative because it usually enumerates
+    # whats _not_ to be retrieved... (maybe this can be used)
     with open(args.query, 'r') as fd:
         title, desc, narrative = fd.read().split('\n\n')
         query = wmd.Doc.from_text(title, desc, refs)

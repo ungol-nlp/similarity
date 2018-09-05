@@ -18,6 +18,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Tuple
+from typing import Union
 
 
 # ---
@@ -340,44 +341,114 @@ def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 # ---
 
 
-def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
-    assert len(doc1.tokens) == len(min_idx)
-    assert len(doc1.tokens) == len(min_dist)
+@attr.s
+class Score:
+    """
+    This class explains the score if dist(verbose=True)
+    """
 
-    nn = [doc2.tokens[idx] for idx in min_idx]
+    # given l1 = len(doc1), l2 = len(doc2)
 
-    tab_data = sorted(zip(doc1.tokens, nn, min_dist), key=lambda t: t[2])
-    print('\n', tabulate(tab_data, headers=['token', 'neighbour', 'distance']))
+    value:   float = attr.ib()
+    T:  np.ndarray = attr.ib()  # (l1, l2)
+
+    doc1: Doc = attr.ib()
+    doc2: Doc = attr.ib()
+
+    doc1_idx: np.array = attr.ib()  # (l1, )
+    doc2_idx: np.array = attr.ib()  # (l2, )
+
+    doc1_dists: np.array = attr.ib()  # (l1, )
+    doc2_dists: np.array = attr.ib()  # (l2, )
+
+    doc1_mean: float = attr.ib()
+    doc2_mean: float = attr.ib()
+
+    # ---
+
+    def _str_hamming_nn(self, ref_doc, cmp_doc, min_idx, min_dist) -> str:
+        assert len(ref_doc.tokens) == len(min_idx)
+        assert len(ref_doc.tokens) == len(min_dist)
+        nn = [cmp_doc.tokens[idx] for idx in min_idx]
+
+        headers = ['token', 'neighbour', 'distance']
+        tab_data = list(zip(ref_doc.tokens, nn, min_dist))
+        tab_data.sort(key=lambda t: t[2])
+
+        return tabulate(tab_data, headers=headers)
+
+    def __str__(self) -> str:
+        sbuf = ['wmd score - {:.3f}'.upper().format(self.value), '']
+
+        # doc1 / doc2
+
+        sbuf.append('\ncomparing "{}" to "{}" [mean score: {}]'.format(
+            self.doc1.name, self.doc2.name, self.doc1_mean))
+
+        sbuf.append(self._str_hamming_nn(
+            self.doc1, self.doc2, self.doc1_idx, self.doc1_dists))
+
+        # doc2 / doc1
+
+        sbuf.append('\ncomparing "{}" to "{}" [mean score: {}]'.format(
+            self.doc2.name, self.doc1.name, self.doc2_mean))
+
+        sbuf.append(self._str_hamming_nn(
+            self.doc2, self.doc1, self.doc2_idx, self.doc2_dists))
+
+        return '\n'.join(sbuf)
 
 
-def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> float:
+def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
     # FIXME assert correct dimensions in every step!
     # compute the distance matrix
     T = distance_matrix_lookup(doc1, doc2)
 
+    assert T.shape[0] == len(doc1)
+    assert T.shape[1] == len(doc2)
+
+    l1, l2 = T.shape
+
     # weight the distance matrix by term frequency per document
     # and select the minimum distances per document
-    # doc1_idx = np.argmin(T * doc1.cnt)
-    # doc2_idx = np.argmin(T.T * doc2.cnt)
-    doc1_idx = np.argmin(T, axis=1)
-    doc2_idx = np.argmin(T, axis=0)
+    W1 = doc1.cnt.repeat(l2).reshape(l1, l2)
+    W2 = doc2.cnt.repeat(l1).reshape(l2, l1)
 
-    assert doc1.codes.shape[0] == doc1_idx.shape[0]
-    assert doc2.codes.shape[0] == doc2_idx.shape[0]
+    assert W1.shape[0] == l1 and W1.shape[1] == l2
+    assert W2.shape[0] == l2 and W2.shape[1] == l1
 
-    # note: this returns the _first_ occurence if there
-    # are multiple codes with the same distance
+    # weigh each distance by relative term frequency
+    doc1_idx = np.argmin(T * W1, axis=1)
+    doc2_idx = np.argmin(T.T * W2, axis=1)
+
+    assert len(doc1_idx.shape) == 1
+    assert len(doc2_idx.shape) == 1
+    assert doc1_idx.shape[0] == l1
+    assert doc2_idx.shape[0] == l2
+
+    # select the nearest neighbours per file
+    # Note: this returns the _first_ occurence if
+    # there are multiple codes with the same distance
+    # (not important for further  computation...)
     doc1_dists = T[np.arange(T.shape[0]), doc1_idx]
     doc2_dists = T.T[np.arange(T.shape[1]), doc2_idx]
 
-    # for manual inspection:
-    # print('\nhamming distances:'.upper())
-    # __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
-    # __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
+    assert len(doc1_dists.shape) == 1
+    assert len(doc2_dists.shape) == 1
+    assert doc1_dists.shape[0] == l1
+    assert doc2.dists.shape[0] == l2
 
-    score = max(doc1_dists.mean(), doc2_dists.mean())
+    doc1_mean = doc1_dists.mean()
+    doc2_mean = doc2_dists.mean()
 
-    if verbose:
-        return score, T, doc1_dists, doc2_dists
+    score = max(doc1_mean, doc2_mean)
 
-    return score
+    if not verbose:
+        return score
+    else:
+        return Score(
+            value=score, T=T,
+            doc1=doc1, doc2=doc2,
+            doc1_mean=doc1_mean, doc2_mean=doc2_mean,
+            doc1_idx=doc1_idx, doc2_idx=doc2_idx,
+            doc1_dists=doc1_dists, doc2_dists=doc2_dists, )
