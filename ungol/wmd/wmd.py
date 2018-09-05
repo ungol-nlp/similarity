@@ -288,10 +288,10 @@ def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
     # compute distance for every possible combination of words
     for i in range(n1):
-        c1, d1 = doc1[i]
+        c1, _, d1 = doc1[i]
 
         for j in range(n2):
-            c2, d2 = doc2[j]
+            c2, _, d2 = doc2[j]
 
             hamming_dist = hamming_bincount(c1, c2)
             normed = _norm_dist(hamming_dist, c_bits, 100)
