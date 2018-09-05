@@ -68,30 +68,42 @@ DistanceMatrix = Callable[[wmd.Doc, wmd.Doc], np.array]
 
 def _distance_matrix_test(fn: DistanceMatrix):
 
-    tokens = ['non', 'all', 'som']
+    vocab = {'non': 0, 'all': 1, 'som': 2, 'non2': 3}
 
-    codes = np.array([
+    codemap = np.array([
         [0x00, 0x00],
         [0xff, 0xff],
         [0x00, 0xff],
+        [0x00, 0x00],
     ]).astype(np.uint8)
 
     # whatever the normalization
     # step does: providing the whole
     # domain should be robust enough
-    dists = np.array([
+    distmap = np.array([
+        [0x0, 2 * 0xff],
         [0x0, 2 * 0xff],
         [0x0, 2 * 0xff],
         [0x0, 2 * 0xff],
     ]).astype(np.uint8)
 
+    ref = wmd.DocReferences(
+        meta={'knn': []},
+        vocabulary=vocab,
+        lookup={v: k for k, v in vocab.items()},
+        stopwords=set(),
+        codemap=codemap,
+        distmap=distmap)
+
     # using different sizes to make sure
-    # no dimensions are switched accidentaly
-    doc1 = wmd.Doc(tokens=tokens, codes=codes, dists=dists)
-    doc2 = wmd.Doc(
-        tokens=tokens + [tokens[0]],
-        codes=np.vstack((codes, codes[0])),
-        dists=np.vstack((dists, dists[0])), )
+    # no dimensions are switched accidently
+    doc1 = wmd.Doc(idx=np.array([0, 1, 2]).astype(np.uint),
+                   cnt=np.array([1/3, 1/3, 1/3]).astype(np.float),
+                   ref=ref, )
+
+    doc2 = wmd.Doc(idx=np.array([0, 1, 2, 3]).astype(np.uint),
+                   cnt=np.array([1/4, 1/4, 1/4, 1/4]).astype(np.float),
+                   ref=ref, )
 
     T = fn(doc1, doc2)
     assert T.shape[0] == len(doc1)
