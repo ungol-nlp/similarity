@@ -61,6 +61,10 @@ class Stats:
 
         a('doc2: {}'.format(self.doc2.name))
         a(str(self.doc2))
+        sbuf += hline
+
+        # FIXME print matrices
+        # FIXME print nn per document
 
         return '\n'.join(sbuf) + '\n'
 

@@ -108,6 +108,10 @@ class DocReferences:
             distmap=dists)
 
 
+class DocumentEmptyException(Exception):
+    pass
+
+
 @attr.s
 class Doc:
 
@@ -185,6 +189,9 @@ class Doc:
             countmap[ref.vocabulary[token]] += 1
 
         countlist = sorted(countmap.items(), key=lambda t: t[1], reverse=True)
+        if not len(countlist):
+            raise DocumentEmptyException
+
         idx, cnt = zip(*countlist)
 
         a_idx = np.array(idx).astype(np.uint)
@@ -344,8 +351,14 @@ def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
 
 
 def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> float:
+    # FIXME assert correct dimensions in every step!
+    # compute the distance matrix
     T = distance_matrix_lookup(doc1, doc2)
 
+    # weight the distance matrix by term frequency per document
+    # and select the minimum distances per document
+    # doc1_idx = np.argmin(T * doc1.cnt)
+    # doc2_idx = np.argmin(T.T * doc2.cnt)
     doc1_idx = np.argmin(T, axis=1)
     doc2_idx = np.argmin(T, axis=0)
 
