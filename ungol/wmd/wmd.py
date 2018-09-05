@@ -1,120 +1,208 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 
 from ungol.models import embcodr
 
 import attr
+import nltk
 import numpy as np
 from tqdm import tqdm as _tqdm
 from tabulate import tabulate
 
 import pickle
 import pathlib
-import argparse
 import functools
+from collections import defaultdict
 
 from typing import Set
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Tuple
 
 
 # ---
 
 tqdm = functools.partial(_tqdm, ncols=80)
 
-# ---
+# global flag in hope of being as non-intrusive as possible
+# regarding benchmarks...
+STATS = False
+
+
+# --- utility
 
 
 def bincount(x: int):
     return bin(x).count('1')
 
+
+def basename(fname: str):
+    return pathlib.Path(fname).name
+
+
+def load_stopwords(f_stopwords: List[str] = None) -> Set[str]:
+    stopwords: Set[str] = set()
+
+    if f_stopwords is None:
+        return stopwords
+
+    def clean_line(raw: str) -> str:
+        return raw.strip()
+
+    def filter_line(token: str) -> bool:
+        cond = any((
+            len(token) == 0,
+            token.startswith(';'),
+            token.startswith('#'), ))
+
+        return not cond
+
+    for fname in f_stopwords:
+        with open(fname, 'r') as fd:
+            raw = fd.readlines()
+
+        stopwords |= set(filter(filter_line, map(clean_line, raw)))
+
+    print('loaded {} stopwords'.format(len(stopwords)))
+    return stopwords
+
+
 # ---
+
+
+@attr.s
+class DocReferences:
+    """
+    It got pretty tedious to pass these arguments around
+    - hence this collection type for use by wmd.Doc
+    """
+
+    # see ungol.models.embcodr.load_codes_bin for meta
+    meta:       Dict[str, Any] = attr.ib()
+    vocabulary: Dict[str, int] = attr.ib()
+    lookup:     Dict[int, str] = attr.ib()
+    stopwords:        Set[str] = attr.ib()
+
+    codemap: np.ndarray = attr.ib()  # (Vocabulary, bytes); np.uint8
+    distmap: np.ndarray = attr.ib()  # (Vocabulary, knn);   np.uint8
+
+    @staticmethod
+    def from_files(
+            f_codemap: str,  # usually codemap.h5 produced by embcodr
+            f_vocab: str,    # pickled dictionary mapping str -> int
+            f_stopwords: List[str] = None):
+
+        with open(f_vocab, 'rb') as fd:
+            vocab = pickle.load(fd)
+
+        meta, dists, codes = embcodr.load_codes_bin(f_codemap)
+        stopwords = load_stopwords(f_stopwords)
+        lookup = {v: k for k, v in vocab.items()}
+
+        return DocReferences(
+            meta=meta,
+            vocabulary=vocab,
+            lookup=lookup,
+            stopwords=stopwords,
+            codemap=codes,
+            distmap=dists)
 
 
 @attr.s
 class Doc:
 
-    name: str = attr.ib()
+    # document specific attributes
+    idx:        np.array = attr.ib()  # (n, ) code indexes
+    cnt:        np.array = attr.ib()  # (n, ) word frequency (normalized)
+    ref:   DocReferences = attr.ib()
 
-    # see ungol.models.embcodr.load_codes_bin for meta
-    meta:  Dict[str, Any] = attr.ib()
-    vocab: Dict[str, int] = attr.ib()
+    # optional (mainly for use in this module)
+    name: str = attr.ib(default=None)
 
-    tokens: List[str] = attr.ib()  # (n, )
-    codes: np.ndarray = attr.ib()  # (n, bytes); np.uint8
-    dists: np.ndarray = attr.ib()  # (n, knn);   np.uint8
+    # ---
+
+    @property
+    def tokens(self) -> Tuple[str]:
+        return [self.ref.lookup[idx] for idx in self.idx]
 
     def __len__(self) -> int:
         return len(self.tokens)
 
-    def __getitem__(self, key):
-        return self.codes[key], self.dists[key]
+    def __getitem__(self, key: int):
+        return self.codes[key], self.cnt[key], self.dists[key]
 
     def __attrs_post_init__(self):
+
+        # type checks
+        assert self.idx.dtype == np.dtype('uint')
+        assert self.cnt.dtype == np.dtype('float')
+        assert round(sum(self.cnt), 5) == 1, round(sum(self.cnt), 5)
+
+        # shape checks
         assert len(self.tokens) == self.codes.shape[0]
         assert len(self.tokens) == self.dists.shape[0]
+        assert self.codes.shape[1] == self.ref.codemap.shape[1]
+        assert self.dists.shape[1] == self.ref.distmap.shape[1]
 
     def __str__(self):
         str_buf = ['\ndocument of length: {}'.format(len(self))]
         tab_data = []
 
-        header_knn = tuple('{}-nn'.format(k) for k in self.meta['knn'])
-        header = ('word', 'index', 'code sum', ) + header_knn
+        header_knn = tuple('{}-nn'.format(k) for k in self.ref.meta['knn'])
+        header = ('word', 'frequency (%)', 'code sum', ) + header_knn
 
         assert self.codes.shape[0] == self.dists.shape[0]
 
-        for token, code, dist in zip(self.tokens, self.codes, self.dists):
+        row_data = self.tokens, self.cnt, self.codes, self.dists
+        for token, freq, code, dist in zip(*row_data):
             assert code.shape[0] == self.codes.shape[1]
 
-            idx = self.vocab[token]
-            tab_data.append((token, idx, code.sum()) + tuple(dist))
+            freq = freq * 100
+            code = code.sum()
+
+            tab_data.append((token, freq, code) + tuple(dist))
 
         str_buf += [tabulate(tab_data, headers=header)]
         return '\n'.join(str_buf)
 
+    @property
+    def dists(self) -> '(words, retained k distances)':
+        return self.ref.distmap[self.idx, ]
+
+    @property
+    def codes(self) -> '(words, bytes)':
+        return self.ref.codemap[self.idx, ]
+
     @staticmethod
-    def create(
-            name: str,
-            f_content: str,
-            f_codemap: str,
-            f_vocab: str,
-            stopwords: Set[str] = None):
+    def from_tokens(name: str, tokens: List[str], ref: DocReferences):
+        sanitized = (token.strip().lower() for token in tokens)
+        filtered = [token for token in sanitized if all([
+            token in ref.vocabulary,
+            token not in ref.stopwords])]
 
-        meta, distmap, codemap = embcodr.load_codes_bin(f_codemap)
+        countmap = defaultdict(lambda: 0)
+        for token in filtered:
+            countmap[ref.vocabulary[token]] += 1
 
-        with open(f_vocab, 'rb') as fd:
-            vocab = pickle.load(fd)
+        countlist = sorted(countmap.items(), key=lambda t: t[1], reverse=True)
+        idx, cnt = zip(*countlist)
 
-        assert len(vocab)
-        assert 'knn' in meta
-        assert len(vocab) == distmap.shape[0]
-        assert len(vocab) == codemap.shape[0]
+        a_idx = np.array(idx).astype(np.uint)
+        a_cnt_raw = np.array(cnt).astype(np.float)
+        a_cnt = a_cnt_raw / a_cnt_raw.sum()
 
-        if stopwords is None:
-            stopwords = set()
+        return Doc(name=name, idx=a_idx, cnt=a_cnt, ref=ref)
 
-        with open(f_content, 'r') as fd:
-            words = fd.read().split(' ')
-
-        filtered = [word for word in words if all([
-            word in vocab,
-            word not in stopwords])]
-
-        tokens = [token.lower().strip() for token in filtered]
-        selection = [vocab[token] for token in tokens]
-
-        return Doc(
-            name=name,
-            meta=meta,
-            vocab=vocab,
-            tokens=tokens,
-            codes=codemap[selection],
-            dists=distmap[selection], )
+    @staticmethod
+    def from_text(name: str, text: str, ref: DocReferences):
+        tokenize = nltk.word_tokenize
+        tokens = tokenize(text)
+        return Doc.from_tokens(name, tokens, ref)
 
 
-# ---
+#
+#  -------------------- HAMMING CALCULATIONS
+#
 
 
 def _assert_hamming_input(code1, code2):
@@ -154,7 +242,10 @@ def hamming_lookup(code1: '(bits, )', code2: '(bits, )') -> int:
     _assert_hamming_input(code1, code2)
     return _hamming_lookup[code1 ^ code2].sum()
 
-# ---
+
+#
+#  -------------------- DISTANCE CALCULATIONS
+#
 
 
 def __print_distance_matrix(T, doc1, doc2):
@@ -252,7 +343,7 @@ def __print_hamming_nn(doc1, doc2, min_idx, min_dist):
     print('\n', tabulate(tab_data, headers=['token', 'neighbour', 'distance']))
 
 
-def dist(doc1: Doc, doc2: Doc) -> float:
+def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> float:
     T = distance_matrix_lookup(doc1, doc2)
 
     doc1_idx = np.argmin(T, axis=1)
@@ -266,115 +357,14 @@ def dist(doc1: Doc, doc2: Doc) -> float:
     doc1_dists = T[np.arange(T.shape[0]), doc1_idx]
     doc2_dists = T.T[np.arange(T.shape[1]), doc2_idx]
 
-    print('\nhamming distances:'.upper())
-    if VERBOSE:
-        __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
-        __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
+    # for manual inspection:
+    # print('\nhamming distances:'.upper())
+    # __print_hamming_nn(doc1, doc2, doc1_idx, doc1_dists)
+    # __print_hamming_nn(doc2, doc1, doc2_idx, doc2_dists)
 
     score = max(doc1_dists.mean(), doc2_dists.mean())
+
+    if verbose:
+        return score, T, doc1_dists, doc2_dists
+
     return score
-
-
-def _gen_combinations(pool: List[Doc]):
-    for i in range(len(pool)):
-        for doc in pool[i:]:
-            yield pool[i], doc
-
-
-def calculate_distances(
-        f_codemap: str,
-        f_vocab: str,
-        f_docs: List[str],
-        stopwords: Set[str] = None):
-
-    doc_paths = [pathlib.Path(fname) for fname in f_docs]
-    argv, kwargv = (f_codemap, f_vocab), dict(stopwords=stopwords)
-
-    docs: List[Doc] = []
-    for path in doc_paths:
-        doc = Doc.create(path.name, str(path), *argv, **kwargv)
-        docs.append(doc)
-
-        if VERBOSE:
-            print('\nloaded document:'.upper(), doc)
-            print(str(doc))
-
-    # for doc1, doc2 in _gen_combinations(docs):
-    #     score = dist(doc1, doc2)
-    #     print('\nscore: {}'.format(score))
-    #     break
-
-
-def _load_stopwords(f_stopwords: List[str]):
-    stopwords: Set[str] = set()
-
-    def clean_line(raw: str) -> str:
-        return raw.strip()
-
-    def filter_line(token: str) -> bool:
-        cond = any((
-            len(token) == 0,
-            token.startswith(';'),
-            token.startswith('#'), ))
-
-        return not cond
-
-    for fname in f_stopwords:
-        with open(fname, 'r') as fd:
-            raw = fd.readlines()
-
-        stopwords |= set(filter(filter_line, map(clean_line, raw)))
-
-    if VERBOSE:
-        print('loaded {} stopwords'.format(len(stopwords)))
-
-    return stopwords
-
-
-def main(args):
-    global VERBOSE
-    VERBOSE = args.verbose
-
-    print('\n', 'welcome to vngol wmd'.upper(), '\n')
-    print('please note: binary data loaded is not checked for malicious')
-    print('content - never load anything you did not produce!\n')
-
-    stopwords = _load_stopwords(args.stopwords)
-    calculate_distances(args.codemap, args.vocabulary, args.docs,
-                        stopwords=stopwords)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        'codemap', type=str,
-        help='binary code file produced by ungol-models/ungol.embcodr', )
-
-    parser.add_argument(
-        'vocabulary', type=str,
-        help='pickle produced by ungol-models/ungol.analyze.vocabulary', )
-
-    parser.add_argument(
-        '--docs', type=str, nargs='+',
-        help='documents to compare'
-    )
-
-    # optional
-
-    parser.add_argument(
-        '-v', '--verbose', action='store_true',
-        help='verbose output with tables and such'
-    )
-
-    parser.add_argument(
-        '-s', '--stopwords', nargs='*',
-        help='lists of words to ignore'
-    )
-
-    return parser.parse_args()
-
-
-if __name__ == '__main__':
-    args = parse_args()
-    main(args)
