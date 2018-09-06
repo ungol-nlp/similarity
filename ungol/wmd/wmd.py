@@ -25,11 +25,6 @@ from typing import Union
 
 tqdm = functools.partial(_tqdm, ncols=80)
 
-# global flag in hope of being as non-intrusive as possible
-# regarding benchmarks...
-STATS = False
-
-
 # --- utility
 
 
