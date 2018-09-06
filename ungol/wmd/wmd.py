@@ -73,19 +73,27 @@ def load_stopwords(f_stopwords: List[str] = None) -> Set[str]:
 
 @attr.s
 class DocReferences:
-    """
-    It got pretty tedious to pass these arguments around
-    - hence this collection type for use by wmd.Doc
+    """To effectively separate shared memory from individual document
+    information for Doc instances, this class wraps information shared
+    by all documents.
+
+    TODO: currently, meta['knn'] and distmap must always be
+    provided. They are in fact completely optional -> so make them
+    default to None and handle this case downstream.
+
     """
 
     # see ungol.models.embcodr.load_codes_bin for meta
     meta:       Dict[str, Any] = attr.ib()
     vocabulary: Dict[str, int] = attr.ib()
-    lookup:     Dict[int, str] = attr.ib()
-    stopwords:        Set[str] = attr.ib()
 
     codemap: np.ndarray = attr.ib()  # (Vocabulary, bytes); np.uint8
     distmap: np.ndarray = attr.ib()  # (Vocabulary, knn);   np.uint8
+
+    stopwords:        Set[str] = attr.ib(default=attr.Factory(set))
+
+    def __attrs_post_init__(self):
+        self.lookup = {v: k for k, v in self.vocabulary.items()}
 
     @staticmethod
     def from_files(
@@ -98,12 +106,10 @@ class DocReferences:
 
         meta, dists, codes = embcodr.load_codes_bin(f_codemap)
         stopwords = load_stopwords(f_stopwords)
-        lookup = {v: k for k, v in vocab.items()}
 
         return DocReferences(
             meta=meta,
             vocabulary=vocab,
-            lookup=lookup,
             stopwords=stopwords,
             codemap=codes,
             distmap=dists)
@@ -133,7 +139,7 @@ class Doc:
     def __len__(self) -> int:
         return len(self.tokens)
 
-    def __getitem__(self, key: int):
+    def __getitem__(self, key: int) -> Tuple[int, int, int]:
         return self.codes[key], self.cnt[key], self.dists[key]
 
     def __attrs_post_init__(self):
@@ -317,7 +323,6 @@ def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
 
-    # FIXME: why is there a second array returned?
     C1 = doc1[idx_x][0]
     C2 = doc2[idx_y][0]
 
@@ -405,7 +410,21 @@ class Score:
         return '\n'.join(sbuf)
 
 
-def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
+def dist(
+        doc1: Doc, doc2: Doc,
+        verbose: bool = False,
+        invert: bool = False) -> Union[float, Score]:
+    """
+
+    Calculate the RWMD score based on hamming distances for two
+    documents. Lower is better.
+
+    :param doc1: Doc - first document
+    :param doc2: Doc - second document
+    :param verbose: bool - if True: return a Score object
+    :param invert: bool - fi True: select the min of the means
+
+    """
 
     # compute the distance matrix
     T = distance_matrix_lookup(doc1, doc2)
@@ -415,7 +434,6 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
 
     l1, l2 = T.shape
 
-    # weight each distance by relative term frequency
     doc1_idx = np.argmin(T, axis=1)
     doc2_idx = np.argmin(T.T, axis=1)
 
@@ -443,7 +461,8 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
     doc1_mean = (doc1_dists * doc1.cnt).sum()
     doc2_mean = (doc2_dists * doc2.cnt).sum()
 
-    score = max(doc1_mean, doc2_mean)
+    selector = min if invert else max
+    score = selector(doc1_mean, doc2_mean)
 
     if not verbose:
         return score
@@ -455,3 +474,39 @@ def dist(doc1: Doc, doc2: Doc, verbose: bool = False) -> Union[float, Score]:
             doc1_mean=doc1_mean, doc2_mean=doc2_mean,
             doc1_idx=doc1_idx, doc2_idx=doc2_idx,
             doc1_dists=doc1_dists, doc2_dists=doc2_dists, )
+
+
+#
+#  MOCKING SECTION - used by tests/benchmarks
+#
+
+
+def mock_codes(bytecount: int) -> Tuple['code1', 'code2']:
+    """
+    To test wmd.hamming_*
+    """
+    code1 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
+    code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
+    return code1, code2
+
+
+def mock_doc(n: int, bytecount: int = 32) -> Doc:
+    """
+    To test wmd.distance_matrix_*
+    """
+    codemap = (np.random.randn(n, bytecount) * 255).astype(dtype=np.uint8)
+    distmap = (np.random.randn(n, 1) * 255).astype(dtype=np.int)
+
+    idx = np.arange(n).astype(np.uint)
+    np.random.shuffle(idx)
+
+    vocab = {str(i): i for i in idx}
+
+    ref = DocReferences(
+        meta={'knn': [1]},
+        vocabulary=vocab,
+        codemap=codemap,
+        distmap=distmap, )
+
+    doc = Doc(idx=idx[:n], cnt=np.ones(n) / n, ref=ref)
+    return doc
