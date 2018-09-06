@@ -330,7 +330,6 @@ def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
 
-    # FIXME: why is there a second array returned?
     C1 = doc1[idx_x][0]
     C2 = doc2[idx_y][0]
 
