@@ -64,11 +64,12 @@ def _benchmark(title: str, tasks: List[Tuple[str]]):
     with mp.Pool() as pool:
         tab_data = pool.map(_run_worker, tasks)
 
+    # tab_data = []
     # for args in tasks:
     #     tab_data.append(_run(*args))
 
     tab_data.sort(key=lambda t: t[1])
-    print('\n', tabulate(tab_data, headers=('name', 'time')), '\n')
+    print('\n', tabulate(tab_data, headers=('name', 'time (ms)')), '\n')
 
 
 def _debug_setup(setup: str):
@@ -82,14 +83,8 @@ def _debug_setup(setup: str):
 
 def hamming_distance():
 
-    setup = '''
-from ungol.wmd import wmd
-import numpy as np
-
-bytecount = 32
-code1 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
-code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
-'''
+    setup = 'from ungol.wmd import wmd\n'
+    setup += 'code1, code2 = wmd.mock_codes(32)'
 
     _benchmark('hamming distance', [
 
@@ -113,28 +108,10 @@ code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
 
 def distance_matrix():
 
-    init = '''
-from ungol.wmd import wmd
-import numpy as np
-
-byte_c = 32
-n_max = 10000
-
-tokens = ['nope' for _ in range(n_max)]
-codes = (np.random.randn(n_max, byte_c) * 255).astype(dtype=np.uint8)
-dists = (np.random.randn(n_max, 4) * 255).astype(dtype=np.uint8)
-'''
-
     def gen_setup(*sizes: int):
         for n in sizes:
-            doc_init = '''
-doc = wmd.Doc(
-    tokens=tokens[:{n}],
-    codes=codes[:{n}],
-    dists=dists[:{n}], )
-'''.format(n=n)
-
-            setup = init + doc_init
+            setup = 'from ungol.wmd import wmd\n'
+            setup += 'doc = wmd.mock_doc({n})'.format(n=n)
             yield n, setup
 
     benchmarks = []
@@ -155,7 +132,7 @@ doc = wmd.Doc(
 
         ]
 
-    for n, setup in gen_setup(500, 1000, 5000):
+    for n, setup in gen_setup(500, 1000, 2000):
         benchmarks += [
 
             ('numpy with lookup table ({n} x {n})'.format(n=n),
