@@ -90,6 +90,20 @@ class DocReferences:
     def __attrs_post_init__(self):
         self.lookup = {v: k for k, v in self.vocabulary.items()}
 
+    def __str__(self) -> str:
+        sbuf = ['VNGOL meta information:']
+
+        sbuf.append('  vocabulary: {} words'.format(
+            len(self.vocabulary)))
+
+        sbuf.append('  filtering: {} stopwords'.format(
+            len(self.stopwords)))
+
+        sbuf.append('  code size: {} bits'.format(
+            self.codemap.shape[1] * 8))
+
+        return '\n'.join(sbuf)
+
     @staticmethod
     def from_files(
             f_codemap: str,  # usually codemap.h5 produced by embcodr
@@ -207,6 +221,42 @@ class Doc:
         tokenize = nltk.word_tokenize
         tokens = tokenize(text)
         return Doc.from_tokens(name, tokens, ref)
+
+
+@attr.s
+class Database:
+
+    docref:   DocReferences = attr.ib()
+    mapping: Dict[str, Doc] = attr.ib()
+
+    def __str__(self) -> str:
+        sbuf = ['VNGOL database']
+
+        sbuf.append('  containing: {} documents'.format(
+            len(self.mapping)))
+
+        sbuf.append('  vocabulary: {} words'.format(
+            len(self.docref.vocabulary)))
+
+        sbuf.append('  filtering: {} stopwords'.format(
+            len(self.docref.stopwords)))
+
+        sbuf.append('  code size: {} bits'.format(
+            self.docref.codemap.shape[1] * 8))
+
+        return '\n' + '\n'.join(sbuf) + '\n'
+
+    # this does not work as instance member because of some
+    # endless recursion thing in pickle and suchlike...
+    @staticmethod
+    def to_file(obj, fname: str):
+        with open(fname, 'wb') as fd:
+            pickle.dump(obj, fd)
+
+    @staticmethod
+    def from_file(fname: str):
+        with open(fname, 'rb') as fd:
+            return pickle.load(fd)
 
 
 #
