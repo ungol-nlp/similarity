@@ -458,24 +458,24 @@ class Score:
 class Strategy(enum.Enum):
 
     # selecting max(score(d1, d2), score(d2, d1))
-    MAX: enum.auto()
+    MAX = enum.auto()
 
     # selecting min(score(d1, d2), score(d2, d1))
-    MIN: enum.auto()
+    MIN = enum.auto()
 
     # only use score(ds, dl), where ds = argmin(|d1|, |d2|)
     # and dl = argmax(|d1|, |d2|)
-    ADAPTIVE_SMALL: enum.auto()
+    ADAPTIVE_SMALL = enum.auto()
 
     # only use score(dl, ds), where ds = argmin(|d1|, |d2|)
     # and dl = argmax(|d1|, |d2|)
-    ADAPTIVE_BIG: enum.auto()
+    ADAPTIVE_BIG = enum.auto()
 
 
 def dist(
         doc1: Doc, doc2: Doc,
         verbose: bool = False,
-        strategy: Strategy = None) -> Union[float, Score]:
+        strategy: Strategy = Strategy.MAX) -> Union[float, Score]:
     """
 
     Calculate the RWMD score based on hamming distances for two
@@ -525,10 +525,6 @@ def dist(
     doc2_mean = (doc2_dists * doc2.cnt).sum()
 
     # produce the score by applying a strategy
-    # (they are obviously mutually exclusive)
-    if strategy is None:
-        strategy = Strategy.MAX
-
     if strategy is Strategy.MAX:
         score = max(doc1_mean, doc2_mean)
 
