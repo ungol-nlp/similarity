@@ -8,6 +8,7 @@ import numpy as np
 from tqdm import tqdm as _tqdm
 from tabulate import tabulate
 
+import enum
 import pickle
 import pathlib
 import functools
@@ -454,10 +455,27 @@ class Score:
         return '\n'.join(sbuf)
 
 
+class Strategy(enum.Enum):
+
+    # selecting max(score(d1, d2), score(d2, d1))
+    MAX: enum.auto()
+
+    # selecting min(score(d1, d2), score(d2, d1))
+    MIN: enum.auto()
+
+    # only use score(ds, dl), where ds = argmin(|d1|, |d2|)
+    # and dl = argmax(|d1|, |d2|)
+    ADAPTIVE_SMALL: enum.auto()
+
+    # only use score(dl, ds), where ds = argmin(|d1|, |d2|)
+    # and dl = argmax(|d1|, |d2|)
+    ADAPTIVE_BIG: enum.auto()
+
+
 def dist(
         doc1: Doc, doc2: Doc,
         verbose: bool = False,
-        invert: bool = False) -> Union[float, Score]:
+        strategy: Strategy = None) -> Union[float, Score]:
     """
 
     Calculate the RWMD score based on hamming distances for two
@@ -466,7 +484,8 @@ def dist(
     :param doc1: Doc - first document
     :param doc2: Doc - second document
     :param verbose: bool - if True: return a Score object
-    :param invert: bool - fi True: select the min of the means
+    :param strategy: Strategy - see wmd.Strategy, defaults to Strategy.MAX
+                                as defined in the paper
 
     """
 
@@ -505,8 +524,24 @@ def dist(
     doc1_mean = (doc1_dists * doc1.cnt).sum()
     doc2_mean = (doc2_dists * doc2.cnt).sum()
 
-    selector = min if invert else max
-    score = selector(doc1_mean, doc2_mean)
+    # produce the score by applying a strategy
+    # (they are obviously mutually exclusive)
+    if strategy is None:
+        strategy = Strategy.MAX
+
+    if strategy is Strategy.MAX:
+        score = max(doc1_mean, doc2_mean)
+
+    if strategy is Strategy.MIN:
+        score = min(doc1_mean, doc2_mean)
+
+    if strategy is Strategy.ADAPTIVE_SMALL:
+        score = doc1_mean if len(doc1) < len(doc2) else doc2_mean
+
+    if strategy is Strategy.ADAPTIVE_BIG:
+        score = doc2_mean if len(doc1) < len(doc2) else doc1_mean
+
+    # ---
 
     if not verbose:
         return score
