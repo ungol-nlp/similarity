@@ -137,6 +137,9 @@ class Doc:
     cnt:        np.array = attr.ib()  # (n, ) word frequency (normalized)
     ref:   DocReferences = attr.ib()
 
+    # (optional) metrics
+    original_count: int = attr.ib(default=0)
+
     # optional (mainly for use in this module)
     name: str = attr.ib(default=None)
 
@@ -167,21 +170,17 @@ class Doc:
 
     def __str__(self):
         str_buf = ['\ndocument of length: {}'.format(len(self))]
-        tab_data = []
 
         header_knn = tuple('{}-nn'.format(k) for k in self.ref.meta['knn'])
         header = ('word', 'frequency (%)', 'code sum', ) + header_knn
 
         assert self.codes.shape[0] == self.dists.shape[0]
 
+        tab_data = []
         row_data = self.tokens, self.cnt, self.codes, self.dists
         for token, freq, code, dist in zip(*row_data):
             assert code.shape[0] == self.codes.shape[1]
-
-            freq = freq * 100
-            code = code.sum()
-
-            tab_data.append((token, freq, code) + tuple(dist))
+            tab_data.append((token, freq * 100, code.sum()) + tuple(dist))
 
         str_buf += [tabulate(tab_data, headers=header)]
         return '\n'.join(str_buf)
@@ -196,8 +195,7 @@ class Doc:
 
     @staticmethod
     def from_tokens(name: str, tokens: List[str], ref: DocReferences):
-        sanitized = (token.strip().lower() for token in tokens)
-        filtered = [token for token in sanitized if all([
+        filtered = [token for token in tokens if all([
             token in ref.vocabulary,
             token not in ref.stopwords])]
 
@@ -215,7 +213,8 @@ class Doc:
         a_cnt_raw = np.array(cnt).astype(np.float)
         a_cnt = a_cnt_raw / a_cnt_raw.sum()
 
-        return Doc(name=name, idx=a_idx, cnt=a_cnt, ref=ref)
+        return Doc(name=name, idx=a_idx, cnt=a_cnt, ref=ref,
+                   original_count=len(tokens), )
 
     @staticmethod
     def from_text(name: str, text: str, ref: DocReferences):
@@ -229,6 +228,7 @@ class Database:
 
     docref:   DocReferences = attr.ib()
     mapping: Dict[str, Doc] = attr.ib()
+    skipped:      List[str] = attr.ib(default=None)
 
     def __str__(self) -> str:
         sbuf = ['VNGOL database']
@@ -245,14 +245,14 @@ class Database:
         sbuf.append('  code size: {} bits'.format(
             self.docref.codemap.shape[1] * 8))
 
+        sbuf.append('  skipped: {} documents'.format(
+            len(self.skipped or [])))
+
         return '\n' + '\n'.join(sbuf) + '\n'
 
-    # this does not work as instance member because of some
-    # endless recursion thing in pickle and suchlike...
-    @staticmethod
-    def to_file(obj, fname: str):
+    def to_file(self, fname: str):
         with open(fname, 'wb') as fd:
-            pickle.dump(obj, fd)
+            pickle.dump(self, fd)
 
     @staticmethod
     def from_file(fname: str):
