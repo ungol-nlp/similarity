@@ -69,7 +69,8 @@ def load_stopwords(f_stopwords: List[str] = None) -> Set[str]:
 
 @attr.s
 class DocReferences:
-    """To effectively separate shared memory from individual document
+    """
+    To effectively separate shared memory from individual document
     information for Doc instances, this class wraps information shared
     by all documents.
 
@@ -86,7 +87,13 @@ class DocReferences:
     codemap: np.ndarray = attr.ib()  # (Vocabulary, bytes); np.uint8
     distmap: np.ndarray = attr.ib()  # (Vocabulary, knn);   np.uint8
 
-    stopwords:        Set[str] = attr.ib(default=attr.Factory(set))
+    stopwords: Set[str] = attr.ib(default=attr.Factory(set))
+
+    # populated when filling the database
+    termfreqs: Dict[int. int] = attr.ib(default=attr.Factory(dict))
+    docfreqs:  Dict[int, int] = attr.ib(default=attr.Factory(dict))
+
+    # ---
 
     def __attrs_post_init__(self):
         self.lookup = {v: k for k, v in self.vocabulary.items()}
@@ -137,10 +144,11 @@ class Doc:
     cnt:        np.array = attr.ib()  # (n, ) word frequency (normalized)
     ref:   DocReferences = attr.ib()
 
-    # (optional) metrics
-    original_count: int = attr.ib(default=0)
+    # optionally filled
+    unknown:  Dict[str, int] = attr.ib(default=attr.Factory(dict))
+    unwanted:            int = attr.ib(default=0)
 
-    # optional (mainly for use in this module)
+    # mainly for use in this module
     name: str = attr.ib(default=None)
 
     # ---
@@ -169,7 +177,11 @@ class Doc:
         assert self.dists.shape[1] == self.ref.distmap.shape[1]
 
     def __str__(self):
-        str_buf = ['\ndocument of length: {}'.format(len(self))]
+        str_buf = ['Document: "{}"'.format(
+            self.name if self.name else 'Unknown')]
+
+        str_buf += ['tokens: {}, unknown: {}, unwanted: {}\n'.format(
+            len(self), len(self.unknown), self.unwanted)]
 
         header_knn = tuple('{}-nn'.format(k) for k in self.ref.meta['knn'])
         header = ('word', 'frequency (%)', 'code sum', ) + header_knn
@@ -183,6 +195,13 @@ class Doc:
             tab_data.append((token, freq * 100, code.sum()) + tuple(dist))
 
         str_buf += [tabulate(tab_data, headers=header)]
+
+        if len(self.unknown):
+            str_buf += ['\nUnknown Words:']
+            for word, freq in self.unknown.items():
+                str_buf += [f'{word}: {freq}']
+
+        str_buf.append('')
         return '\n'.join(str_buf)
 
     @property
@@ -195,12 +214,23 @@ class Doc:
 
     @staticmethod
     def from_tokens(name: str, tokens: List[str], ref: DocReferences):
-        filtered = [token for token in tokens if all([
-            token in ref.vocabulary,
-            token not in ref.stopwords])]
 
+        # partition tokens
+        tok_known, tok_unknown, tok_unwanted = [], {}, 0
+
+        for token in tokens:
+            if token in ref.stopwords:
+                tok_unwanted += 1
+            elif token in ref.vocabulary:
+                tok_known.append(token)
+            else:
+                tok_unknown[token] = tok_unknown.get(token, 0) + 1
+
+        # aggregate frequencies; builds mapping of idx -> freq,
+        # sort by frequency and build fast lookup arrays
+        # with indexes and normalized distribution values
         countmap = defaultdict(lambda: 0)
-        for token in filtered:
+        for token in tok_known:
             countmap[ref.vocabulary[token]] += 1
 
         countlist = sorted(countmap.items(), key=lambda t: t[1], reverse=True)
@@ -214,12 +244,12 @@ class Doc:
         a_cnt = a_cnt_raw / a_cnt_raw.sum()
 
         return Doc(name=name, idx=a_idx, cnt=a_cnt, ref=ref,
-                   original_count=len(tokens), )
+                   unknown=tok_unknown, unwanted=tok_unwanted)
 
     @staticmethod
     def from_text(name: str, text: str, ref: DocReferences):
         tokenize = nltk.word_tokenize
-        tokens = tokenize(text)
+        tokens = tokenize(text.lower())
         return Doc.from_tokens(name, tokens, ref)
 
 
@@ -399,7 +429,7 @@ class Score:
 
     # given l1 = len(doc1), l2 = len(doc2)
 
-    value:   float = attr.ib()
+    value:   float = attr.ib()  # based on the strategy
     T:  np.ndarray = attr.ib()  # (l1, l2)
 
     doc1: Doc = attr.ib()
@@ -411,11 +441,17 @@ class Score:
     doc1_dists: np.array = attr.ib()  # (l1, )
     doc2_dists: np.array = attr.ib()  # (l2, )
 
+    # raw mean without weighting
     doc1_raw_mean: float = attr.ib()
     doc2_raw_mean: float = attr.ib()
 
+    # distances weighted by frequency
     doc1_mean: float = attr.ib()
     doc2_mean: float = attr.ib()
+
+    # scores reduced by fraction of matching terms
+    doc1_score: float = attr.ib()
+    doc2_score: float = attr.ib()
 
     # ---
 
@@ -435,10 +471,12 @@ class Score:
 
         # doc1 / doc2
 
-        fmt = '\ncomparing "{}" to "{}" [mean raw {:.3f}, weighted: {:.3f}]'
+        fmt = '\ncomparing "{}" to "{}" [mean raw {:.3f}, '
+        fmt += 'weighted: {:.3f}, +unknown: {:3f}]'
+
         sbuf.append(fmt.format(
             self.doc1.name, self.doc2.name,
-            self.doc1_raw_mean, self.doc2_mean))
+            self.doc1_raw_mean, self.doc2_mean, self.doc2_score))
 
         sbuf.append(self._str_hamming_nn(
             self.doc1, self.doc2, self.doc1_idx, self.doc1_dists))
@@ -447,7 +485,7 @@ class Score:
 
         sbuf.append(fmt.format(
             self.doc2.name, self.doc1.name,
-            self.doc2_raw_mean, self.doc2_mean))
+            self.doc2_raw_mean, self.doc2_mean, self.doc2_score))
 
         sbuf.append(self._str_hamming_nn(
             self.doc2, self.doc1, self.doc2_idx, self.doc2_dists))
@@ -474,12 +512,15 @@ class Strategy(enum.Enum):
 
 def dist(
         doc1: Doc, doc2: Doc,
-        verbose: bool = False,
-        strategy: Strategy = Strategy.MAX) -> Union[float, Score]:
+        strategy: Strategy = Strategy.MAX,
+        # ------------------------------------ optional
+        docref: DocReferences = None,
+        idf: bool = False,
+        verbose: bool = False, ) -> Union[float, Score]:
     """
 
     Calculate the RWMD score based on hamming distances for two
-    documents. Lower is better.
+    documents. Higher is better.
 
     :param doc1: Doc - first document
     :param doc2: Doc - second document
@@ -489,7 +530,7 @@ def dist(
 
     """
 
-    # compute the distance matrix
+    # Compute the distance matrix.
     T = distance_matrix_lookup(doc1, doc2)
 
     assert T.shape[0] == len(doc1)
@@ -505,10 +546,9 @@ def dist(
     assert doc1_idx.shape[0] == l1
     assert doc2_idx.shape[0] == l2
 
-    # select the nearest neighbours per file
-    # Note: this returns the _first_ occurence if
-    # there are multiple codes with the same distance
-    # (not important for further  computation...)
+    # Select the nearest neighbours per file Note: this returns the
+    # _first_ occurence if there are multiple codes with the same
+    # distance (not important for further computation...)
     doc1_dists = T[np.arange(T.shape[0]), doc1_idx]
     doc2_dists = T.T[np.arange(T.shape[1]), doc2_idx]
 
@@ -517,27 +557,66 @@ def dist(
     assert doc1_dists.shape[0] == l1
     assert doc2.dists.shape[0] == l2
 
+    # --------------------
+
     doc1_raw_mean = doc1_dists.mean()
     doc2_raw_mean = doc2_dists.mean()
 
-    # weight by term frequency
+    # Weight by term frequency.
     doc1_mean = (doc1_dists * doc1.cnt).sum()
     doc2_mean = (doc2_dists * doc2.cnt).sum()
 
+    # --------------------
+
+    # Include terms not found in the code database: an exact match
+    # would produce a T[i, j] = 0 value which results in its frequency
+    # weighting to become 0 and thus reducing the absolute score
+    # value. This approach reduces the total score by the fraction
+    # of matching unknown terms weighted by frequency.
+    common_unknown = doc1.unknown.keys() & doc2.unknown.keys()
+
+    doc1_un_weight = sum(doc1.unknown[tok] for tok in common_unknown)
+    doc2_un_weight = sum(doc2.unknown[tok] for tok in common_unknown)
+
+    doc1_unknown_ratio = doc1_un_weight / (doc1_un_weight + len(doc1))
+    doc2_unknown_ratio = doc2_un_weight / (doc2_un_weight + len(doc2))
+
+    doc1_score = (1 - doc1_unknown_ratio) * doc1_mean
+    doc2_score = (1 - doc2_unknown_ratio) * doc2_mean
+
+    assert 0 <= doc1_score and doc1_score <= doc1_mean
+    assert 0 <= doc2_score and doc2_score <= doc2_mean
+    if len(common_unknown):
+        assert doc1_score < doc1_mean
+        assert doc2_score < doc2_mean
+
+    # --------------------
+
+    # Apply the inverse document frequency if this information is
+    # provided by the DocReferences.
+    if idf:
+        assert docref is not None
+
+        # FIXME
+
+    # --------------------
+
     # produce the score by applying a strategy
     if strategy is Strategy.MAX:
-        score = max(doc1_mean, doc2_mean)
+        score = max(doc1_score, doc2_score)
 
     if strategy is Strategy.MIN:
-        score = min(doc1_mean, doc2_mean)
+        score = min(doc1_score, doc2_score)
 
     if strategy is Strategy.ADAPTIVE_SMALL:
-        score = doc1_mean if len(doc1) < len(doc2) else doc2_mean
+        score = doc1_score if len(doc1) < len(doc2) else doc2_score
 
     if strategy is Strategy.ADAPTIVE_BIG:
-        score = doc2_mean if len(doc1) < len(doc2) else doc1_mean
+        score = doc2_score if len(doc1) < len(doc2) else doc1_score
 
-    # ---
+    # --------------------
+
+    score = 1 - score
 
     if not verbose:
         return score
@@ -547,6 +626,7 @@ def dist(
             doc1=doc1, doc2=doc2,
             doc1_raw_mean=doc1_raw_mean, doc2_raw_mean=doc2_raw_mean,
             doc1_mean=doc1_mean, doc2_mean=doc2_mean,
+            doc1_score=doc1_score, doc2_score=doc2_score,
             doc1_idx=doc1_idx, doc2_idx=doc2_idx,
             doc1_dists=doc1_dists, doc2_dists=doc2_dists, )
 
