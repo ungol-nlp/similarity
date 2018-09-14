@@ -90,7 +90,6 @@ def _distance_matrix_test(fn: DistanceMatrix):
     ref = wmd.DocReferences(
         meta={'knn': []},
         vocabulary=vocab,
-        lookup={v: k for k, v in vocab.items()},
         stopwords=set(),
         codemap=codemap,
         distmap=distmap)
