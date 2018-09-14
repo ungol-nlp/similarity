@@ -90,8 +90,11 @@ class DocReferences:
     stopwords: Set[str] = attr.ib(default=attr.Factory(set))
 
     # populated when filling the database
-    termfreqs: Dict[int. int] = attr.ib(default=attr.Factory(dict))
+    termfreqs: Dict[int, int] = attr.ib(default=attr.Factory(dict))
     docfreqs:  Dict[int, int] = attr.ib(default=attr.Factory(dict))
+
+    # documents not added to the database
+    skipped:        List[str] = attr.ib(default=None)
 
     # ---
 
@@ -258,7 +261,6 @@ class Database:
 
     docref:   DocReferences = attr.ib()
     mapping: Dict[str, Doc] = attr.ib()
-    skipped:      List[str] = attr.ib(default=None)
 
     def __str__(self) -> str:
         sbuf = ['VNGOL database']
@@ -274,9 +276,6 @@ class Database:
 
         sbuf.append('  code size: {} bits'.format(
             self.docref.codemap.shape[1] * 8))
-
-        sbuf.append('  skipped: {} documents'.format(
-            len(self.skipped or [])))
 
         return '\n' + '\n'.join(sbuf) + '\n'
 
@@ -449,7 +448,7 @@ class Score:
     doc1_mean: float = attr.ib()
     doc2_mean: float = attr.ib()
 
-    # scores reduced by fraction of matching terms
+    # scores reduced by fraction of matching unknown terms
     doc1_score: float = attr.ib()
     doc2_score: float = attr.ib()
 
@@ -510,26 +509,7 @@ class Strategy(enum.Enum):
     ADAPTIVE_BIG = enum.auto()
 
 
-def dist(
-        doc1: Doc, doc2: Doc,
-        strategy: Strategy = Strategy.MAX,
-        # ------------------------------------ optional
-        docref: DocReferences = None,
-        idf: bool = False,
-        verbose: bool = False, ) -> Union[float, Score]:
-    """
-
-    Calculate the RWMD score based on hamming distances for two
-    documents. Higher is better.
-
-    :param doc1: Doc - first document
-    :param doc2: Doc - second document
-    :param verbose: bool - if True: return a Score object
-    :param strategy: Strategy - see wmd.Strategy, defaults to Strategy.MAX
-                                as defined in the paper
-
-    """
-
+def _dist_distances(doc1, doc2) -> Tuple[np.array]:
     # Compute the distance matrix.
     T = distance_matrix_lookup(doc1, doc2)
 
@@ -557,16 +537,41 @@ def dist(
     assert doc1_dists.shape[0] == l1
     assert doc2.dists.shape[0] == l2
 
-    # --------------------
+    return (doc1_dists, doc2_dists, T,
+            doc1_idx, doc2_idx, doc1_dists, doc2_dists, )
 
-    doc1_raw_mean = doc1_dists.mean()
-    doc2_raw_mean = doc2_dists.mean()
 
-    # Weight by term frequency.
-    doc1_mean = (doc1_dists * doc1.cnt).sum()
-    doc2_mean = (doc2_dists * doc2.cnt).sum()
+def _dist_means(
+        doc1: Doc, doc2: Doc,
+        a_dist1: np.array, a_dist2: np.array,
+        idf: bool = False, db: Database = None, ) -> Tuple[float, float]:
 
-    # --------------------
+    if idf:
+        assert db
+
+        df1 = np.array([db.ref.docfreqs[idx] for idx in doc1.idx])
+        df2 = np.array([db.ref.docfreqs[idx] for idx in doc2.idx])
+
+        # very infrequent terms are close to 0,
+        # very frequent terms close to 1
+        idf1 = np.log(df1) / np.log(len(db.mapping))
+        idf2 = np.log(df2) / np.log(len(db.mapping))
+
+        a_dist1 = (a_dist1 + idf1) / 2
+        a_dist2 = (a_dist2 + idf2) / 2
+
+    doc1_mean = (a_dist1 * doc1.cnt).sum()
+    doc2_mean = (a_dist2 * doc2.cnt).sum()
+
+    assert 0 <= doc1_mean and doc1_mean <= 1
+    assert 0 <= doc2_mean and doc2_mean <= 1
+
+    return doc1_mean, doc2_mean
+
+
+def _dist_unknown(
+        doc1: Doc, doc2: Doc,
+        doc1_mean: float, doc2_mean: float) -> Tuple[float]:
 
     # Include terms not found in the code database: an exact match
     # would produce a T[i, j] = 0 value which results in its frequency
@@ -586,20 +591,18 @@ def dist(
 
     assert 0 <= doc1_score and doc1_score <= doc1_mean
     assert 0 <= doc2_score and doc2_score <= doc2_mean
+
     if len(common_unknown):
         assert doc1_score < doc1_mean
         assert doc2_score < doc2_mean
 
-    # --------------------
+    return doc1_score, doc2_score
 
-    # Apply the inverse document frequency if this information is
-    # provided by the DocReferences.
-    if idf:
-        assert docref is not None
 
-        # FIXME
-
-    # --------------------
+def _dist_select(
+        strategy: Strategy,
+        doc1: Doc, doc2: Doc,
+        doc1_score: float, doc2_score: float, ) -> float:
 
     # produce the score by applying a strategy
     if strategy is Strategy.MAX:
@@ -614,17 +617,59 @@ def dist(
     if strategy is Strategy.ADAPTIVE_BIG:
         score = doc2_score if len(doc1) < len(doc2) else doc1_score
 
-    # --------------------
+    return score
 
+
+def dist(
+        doc1: Doc, doc2: Doc,
+
+        strategy: Strategy = Strategy.MAX,
+        idf: bool = False, db: Database = None,
+        verbose: bool = False, ) -> Union[float, Score]:
+    """
+
+    Calculate the RWMD score based on hamming distances for two
+    documents. Higher is better.
+
+    :param doc1: Doc - first document
+    :param doc2: Doc - second document
+    :param verbose: bool - if True: return a Score object
+    :param strategy: Strategy - see wmd.Strategy, defaults to Strategy.MAX
+                                as defined in the paper
+
+    """
+
+    # retrieve hamming distance vectors for each word to each
+    # corresponding nearest neighbour for both directions
+    a_dist1, a_dist2, *dist_data = _dist_distances(doc1, doc2)
+
+    # reduce the vectors to their means, weighted by the term
+    # frequencies and optionally inverse document frequencies
+    means = _dist_means(doc1, doc2, a_dist1, a_dist2, idf, db)
+
+    # factor in words that are not present in the vocabulary
+    # by decreasing the distance score based on the frequency
+    scores = _dist_unknown(doc1, doc2, *means)
+
+    # combine the scores or select from one of the scores
+    # based on the desired strategy
+    score = _dist_select(strategy, doc1, doc2, *scores)
+
+    # reverse the score such that higher is better
     score = 1 - score
 
     if not verbose:
         return score
+
     else:
+        doc1_mean, doc2_mean = means
+        doc1_score, doc2_score = scores
+        T, doc1_idx, doc2_idx, doc1_dists, doc2_dists = dist_data
+
         return Score(
             value=score, T=T,
             doc1=doc1, doc2=doc2,
-            doc1_raw_mean=doc1_raw_mean, doc2_raw_mean=doc2_raw_mean,
+            doc1_raw_mean=a_dist1.mean(), doc2_raw_mean=a_dist2.mean(),
             doc1_mean=doc1_mean, doc2_mean=doc2_mean,
             doc1_score=doc1_score, doc2_score=doc2_score,
             doc1_idx=doc1_idx, doc2_idx=doc2_idx,
