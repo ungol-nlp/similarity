@@ -88,24 +88,26 @@ def _distance_matrix_test(fn: DistanceMatrix):
     ]).astype(np.uint8)
 
     ref = wmd.DocReferences(
-        meta={'knn': []},
+        meta={'knn': ['1', '∞']},
         vocabulary=vocab,
         stopwords=set(),
         codemap=codemap,
         distmap=distmap)
 
     # using different sizes to make sure
-    # no dimensions are switched accidently
+    # no dimensions are switched by accident
     doc1 = wmd.Doc(idx=np.array([0, 1, 2]).astype(np.uint),
-                   cnt=np.array([1/3, 1/3, 1/3]).astype(np.float),
+                   cnt=np.array([1, 1, 1]).astype(np.uint),
                    ref=ref, )
 
     doc2 = wmd.Doc(idx=np.array([0, 1, 2, 3]).astype(np.uint),
-                   cnt=np.array([1/4, 1/4, 1/4, 1/4]).astype(np.float),
+                   cnt=np.array([1, 1, 1, 1]).astype(np.uint),
                    ref=ref, )
 
     T = fn(doc1, doc2)
+
     assert T.shape[0] == len(doc1)
+    assert T.shape[1] == len(doc2)
 
     # now the tedious job of checking all combinations:
 
