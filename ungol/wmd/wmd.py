@@ -511,7 +511,8 @@ class Score:
     a_weighted: Tuple[np.array] = attr.ib()  # distances weighted
 
     # common unknown
-    n_scores:         Tuple[float] = attr.ib()  # per-document score (inverse)
+    n_reduced:        Tuple[float] = attr.ib()  # common unknown ratio weighted
+    n_scores:         Tuple[float] = attr.ib()  # per-document score
     n_unknown_ratio:  Tuple[float] = attr.ib()  # absolute reduction value
     common_unknown:       Set[str] = attr.ib()  # tokens shared
 
@@ -529,8 +530,8 @@ class Score:
         maxl = max(len(l) for l in lines)
 
         # clock-wise, starting north (west)
-        borders = '-', ' |', '-', ' | '
-        edges = ' +-', '-+', '-+', ' +-'
+        borders = '-', '  |', '-', ' |  '
+        edges = ' +--', '--+', '--+', ' +--'
 
         first = f'{edges[0]}' + f'{borders[0]}' * maxl + f'{edges[1]}'
         midfmt = f'{borders[3]}%-' + str(maxl) + f's{borders[1]}'
@@ -561,13 +562,28 @@ class Score:
 
         docbuf = []
 
-        # docbuf.append(f'\ncomparing: "{doc1.name}" to "{doc2.name}"')
-        # docbuf.append(f'score: {self.scores[a]:.4f}' +
-        #               f' = 1 - {self.weighted[a]:.4f}' +
-        #               f' * {self.unknown_ratio[a]:.4f}\n')
+        docbuf.append(f'\ncomparing: "{doc1.name}" to "{doc2.name}"\n')
+        docbuf.append(f'score = {self.n_scores[a]:.4f} = ' +
+                      f'1 - {self.n_reduced[a]:.4f}')
+        docbuf.append('unknown ratio: {:.2f}%'.format(
+            self.n_unknown_ratio[a] * 100))
 
-        headers = ['no', 'token', 'neighbour', 'dist', 'f(dist)',
-                   'tf', 'idf', ]
+        docbuf.append('')
+
+        headers, tab_data = zip(*(
+            ('', 'score:'),
+            ('dist', self.n_dists[a]),
+            ('tf', self.n_tf_weighted[a]),
+            ('tf-idf', self.n_tfidf_weighted[a]),
+            ('unknown', self.n_reduced[a])))
+
+        docbuf.append(tabulate([tab_data], headers=headers, floatfmt='.4f'))
+        docbuf.append('\n')
+
+        # ---
+
+        headers = ('no', 'token', 'neighbour', 'dist', 'f(dist)',
+                   'tf', 'idf', )
 
         tab_data = list(zip(
             doc1.tokens,
@@ -575,18 +591,19 @@ class Score:
             self.a_dists[a],
             self.a_weighted[a],
             self.a_tfs[a],
-            self.a_idfs[a]))
+            self.a_idfs[a], ))
 
         tab_data.sort(key=lambda t: t[2])
 
         # add means
-        # weight_row = (
-        #     'weighted score\n-', '',
-        #     self.n_dists[a],
-        #     self.n_tf_weighted[a],
-        #     self.n_tfidf_weighted[a])
+        weight_row = (
+            'mean:\n-', '',
+            self.a_dists[a].mean(),
+            0,
+            self.a_tfs[a].mean(),
+            self.a_idfs[a].mean(), )
 
-        # tab_data.insert(0, weight_row)
+        tab_data.insert(0, weight_row)
 
         dist_table = tabulate(
             tab_data, headers=headers,
@@ -598,8 +615,9 @@ class Score:
         try:
             self._str_common_unknown(docbuf, doc1)
         except AttributeError:
-            docbuf.append('No common unknown word information\n')
+            docbuf.append('No common unknown word information')
 
+        docbuf += ['', '']
         return self._draw_border('\n'.join(docbuf))
 
 
@@ -689,15 +707,18 @@ def _dist_weighted(
     a_weighted_doc1 = a_dist1 * doc1.freq * a_idf1
     a_weighted_doc2 = a_dist2 * doc2.freq * a_idf2
 
-    n_dist_weighted_doc1 = a_weighted_doc1.sum()
-    n_dist_weighted_doc2 = a_weighted_doc2.sum()
+    n_dist_weighted_doc1 = round(a_weighted_doc1.sum(), 5)
+    n_dist_weighted_doc2 = round(a_weighted_doc2.sum(), 5)
 
     # --- checking
 
-    assert 0 <= n_dist_weighted_doc1 and n_dist_weighted_doc1 <= 1
-    assert 0 <= n_dist_weighted_doc1 and n_dist_weighted_doc2 <= 1
+    # assert -.1 <= n_dw1 and n_dw1 <= 1.1, n_dw1
+    # assert -.1 <= n_dw2 and n_dw2 <= 1.1, n_dw2
 
     # --- mapping
+
+    # n_dist_weighted_doc1 = max(min(n_dw1, 1), 0)
+    # n_dist_weighted_doc2 = max(min(n_dw2, 1), 0)
 
     weighted = n_dist_weighted_doc1, n_dist_weighted_doc2
     weighted_mapping = None
@@ -733,11 +754,11 @@ def _dist_unknown(
     doc1_un_weight = sum(doc1.unknown[tok] for tok in common_unknown)
     doc2_un_weight = sum(doc2.unknown[tok] for tok in common_unknown)
 
-    doc1_unknown_ratio = 1 - (doc1_un_weight / (doc1_un_weight + len(doc1)))
-    doc2_unknown_ratio = 1 - (doc2_un_weight / (doc2_un_weight + len(doc2)))
+    doc1_unknown_ratio = doc1_un_weight / (doc1_un_weight + len(doc1))
+    doc2_unknown_ratio = doc2_un_weight / (doc2_un_weight + len(doc2))
 
-    doc1_score = doc1_unknown_ratio * doc1_weighted
-    doc2_score = doc2_unknown_ratio * doc2_weighted
+    doc1_score = (1 - doc1_unknown_ratio) * doc1_weighted
+    doc2_score = (1 - doc2_unknown_ratio) * doc2_weighted
 
     # --- checking
 
@@ -814,10 +835,10 @@ def dist(
 
     # factor in words that are not present in the vocabulary
     # by decreasing the distance score based on the frequency
-    scores, unknown_mapping = _dist_unknown(*docs, *weighted, verbose)
+    reduced, unknown_mapping = _dist_unknown(*docs, *weighted, verbose)
 
     # reverse the score such that higher is better
-    scores = [1 - s for s in scores]
+    scores = [1 - s for s in reduced]
 
     # combine the scores or select from one of the scores
     # based on the desired strategy
@@ -832,6 +853,7 @@ def dist(
         return Score(
             value=score, docs=docs, **{
                 'strategy': strategy.name,
+                'n_reduced': reduced,
                 'n_scores': scores,
                 **dist_mapping,
                 **weighted_mapping,
