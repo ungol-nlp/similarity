@@ -566,8 +566,8 @@ class Score:
         #               f' = 1 - {self.weighted[a]:.4f}' +
         #               f' * {self.unknown_ratio[a]:.4f}\n')
 
-        headers = ['no', 'token', 'neighbour', 'dist', 'weighted dist',
-                   'tf', 'nr-idf', ]
+        headers = ['no', 'token', 'neighbour', 'dist', 'f(dist)',
+                   'tf', 'idf', ]
 
         tab_data = list(zip(
             doc1.tokens,
@@ -681,13 +681,13 @@ def _dist_weighted(
         a_df1 = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
         a_df2 = np.array([db.docref.docfreqs[idx] for idx in doc2.idx])
 
-        # very infrequent terms are close to 0,
-        # very frequent terms close to 1
-        a_idf1: np.array = 1 - np.log(a_df1) / np.log(len(db.mapping))
-        a_idf2: np.array = 1 - np.log(a_df2) / np.log(len(db.mapping))
+        # each term of the vocabulary appears in at least one document
+        # => thus there is not N / 0 problem.
+        a_idf1: np.array = np.log(len(db.mapping) / a_df1)
+        a_idf2: np.array = np.log(len(db.mapping) / a_df2)
 
     a_weighted_doc1 = a_dist1 * doc1.freq * a_idf1
-    a_weighted_doc2 = a_dist1 * doc2.freq * a_idf2
+    a_weighted_doc2 = a_dist2 * doc2.freq * a_idf2
 
     n_dist_weighted_doc1 = a_weighted_doc1.sum()
     n_dist_weighted_doc2 = a_weighted_doc2.sum()
