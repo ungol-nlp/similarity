@@ -144,8 +144,10 @@ class DocumentEmptyException(Exception):
 class Doc:
 
     # document specific attributes
-    idx:        np.array = attr.ib()  # (n, ) code indexes
-    cnt:        np.array = attr.ib()  # (n, ) word frequency (normalized)
+    idx:  np.array = attr.ib()  # (n, ) code indexes
+    cnt:  np.array = attr.ib()  # (n, ) word frequency counts
+#   freq: np,array = attr.ib()  # calculated by __attr_post_init__
+
     ref:   DocReferences = attr.ib()
 
     # optionally filled
@@ -165,14 +167,16 @@ class Doc:
         return len(self.tokens)
 
     def __getitem__(self, key: int) -> Tuple[int, int, int]:
-        return self.codes[key], self.cnt[key], self.dists[key]
+        return self.codes[key]
 
     def __attrs_post_init__(self):
+        self.freq = self.cnt.astype(np.float) / self.cnt.sum()
 
         # type checks
         assert self.idx.dtype == np.dtype('uint')
-        assert self.cnt.dtype == np.dtype('float')
-        assert round(sum(self.cnt), 5) == 1, round(sum(self.cnt), 5)
+        assert self.cnt.dtype == np.dtype('uint')
+        assert self.freq.dtype == np.dtype('float')
+        assert round(sum(self.freq), 5) == 1, round(sum(self.freq), 5)
 
         # shape checks
         assert len(self.tokens) == self.codes.shape[0]
@@ -188,15 +192,15 @@ class Doc:
             len(self), len(self.unknown), self.unwanted)]
 
         header_knn = tuple('{}-nn'.format(k) for k in self.ref.meta['knn'])
-        header = ('word', 'frequency (%)', 'code sum', ) + header_knn
+        header = ('word', 'term count', 'code sum', ) + header_knn
 
         assert self.codes.shape[0] == self.dists.shape[0]
 
         tab_data = []
         row_data = self.tokens, self.cnt, self.codes, self.dists
-        for token, freq, code, dist in zip(*row_data):
+        for token, cnt, code, dist in zip(*row_data):
             assert code.shape[0] == self.codes.shape[1]
-            tab_data.append((token, freq * 100, code.sum()) + tuple(dist))
+            tab_data.append((token, cnt, code.sum()) + tuple(dist))
 
         str_buf += [tabulate(tab_data, headers=header)]
 
@@ -244,8 +248,7 @@ class Doc:
         idx, cnt = zip(*countlist)
 
         a_idx = np.array(idx).astype(np.uint)
-        a_cnt_raw = np.array(cnt).astype(np.float)
-        a_cnt = a_cnt_raw / a_cnt_raw.sum()
+        a_cnt = np.array(cnt).astype(np.uint)
 
         return Doc(name=name, idx=a_idx, cnt=a_cnt, ref=ref,
                    unknown=tok_unknown, unwanted=tok_unwanted)
@@ -264,12 +267,13 @@ class Database:
     mapping: Dict[str, Doc] = attr.ib(default=attr.Factory(dict))
 
     def __add__(self, doc: Doc):
-        assert len(doc.idx)
-        assert doc.name
+        assert len(doc.idx), 'the document has no content'
+        assert doc.name, 'document needs the name attribute set'
+        assert doc.name not in self.mapping, f'"{doc.name}" already indexed'
 
-        for idx in doc.idx:
+        for i, idx in enumerate(doc.idx):
             tf = self.docref.termfreqs
-            tf[idx] = tf.get(idx, 0) + 1
+            tf[idx] = tf.get(idx, 0) + doc.cnt[i]
 
         for idx in set(doc.idx):
             df = self.docref.docfreqs
@@ -307,6 +311,34 @@ class Database:
     def to_file(self, fname: str):
         with open(fname, 'wb') as fd:
             pickle.dump(self, fd)
+
+    def doc_info(self, doc_id: str, legend: bool = True) -> str:
+        assert doc_id in self.mapping, f'"doc_id" not found in db'
+        doc = self.mapping[doc_id]
+
+        buf = [f'Information about "{doc_id}"', '']
+
+        headers = 'word', 'idx', 'dtf (%)', 'dtf', 'gtf', 'df'
+        tab_data = zip(
+            doc.tokens,
+            doc.idx,
+            (f'{freq:.2f}' for freq in doc.freq),
+            doc.cnt,
+            (self.docref.termfreqs[idx] for idx in doc.idx),
+            (self.docref.docfreqs[idx] for idx in doc.idx), )
+
+        buf.append(tabulate(tab_data, headers=headers))
+
+        if legend:
+            buf.append('')
+            buf.append('Legend\n' +
+                       '  idx: embedding matrix index\n' +
+                       '  dtf: document term frequency\n' +
+                       '  gtf: global term frequency\n' +
+                       '  df: document frequency')
+
+            buf.append('')
+        return '\n'.join(buf)
 
     @staticmethod
     def from_file(fname: str):
@@ -394,10 +426,10 @@ def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
     # compute distance for every possible combination of words
     for i in range(n1):
-        c1, _, d1 = doc1[i]
+        c1 = doc1[i]
 
         for j in range(n2):
-            c2, _, d2 = doc2[j]
+            c2 = doc2[j]
 
             hamming_dist = hamming_bincount(c1, c2)
             normed = _norm_dist(hamming_dist, c_bits, 100)
@@ -423,8 +455,8 @@ def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
 
-    C1 = doc1[idx_x][0]
-    C2 = doc2[idx_y][0]
+    C1 = doc1[idx_x]
+    C2 = doc2[idx_y]
 
     T = _dmv_vectorized_bincount(C1 ^ C2).sum(axis=-1)
     return T / (doc1.codes.shape[1] * 8)
@@ -435,8 +467,8 @@ def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
 
-    C1 = doc1[idx_x][0]
-    C2 = doc2[idx_y][0]
+    C1 = doc1[idx_x]
+    C2 = doc2[idx_y]
 
     T = _hamming_lookup[C1 ^ C2].sum(axis=-1)
     return T / (doc1.codes.shape[1] * 8)
@@ -457,36 +489,40 @@ class Score:
     # given l1 = len(doc1), l2 = len(doc2)
 
     value:   float = attr.ib()  # based on the strategy
-    T:  np.ndarray = attr.ib()  # (l1, l2)
 
     # all values are length 2 tuples
 
-    docs:       Tuple[Doc] = attr.ib()
+    docs:  Tuple[Doc] = attr.ib()
+    strategy:     str = attr.ib()
 
-    # token-wise values
-    idxs:  Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
-    dists: Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
-    freqs: Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
-    idfs:  Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
+    # distances
+    T:         np.ndarray = attr.ib()  # distance matrix
+    n_dists: Tuple[float] = attr.ib()  # without tf/idf weighting
 
-    # reduced values
-    dist_weighted: Tuple[float] = attr.ib()  # without tf/idf weighting
-    freq_weighted: Tuple[float] = attr.ib()  # with tf weighting
-    weighted:      Tuple[float] = attr.ib()  # with tf/idf weighting
+    a_idxs:     Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
+    a_dists:    Tuple[np.array] = attr.ib()  # raw distance values
 
-    scores:     Tuple[float] = attr.ib()  # per-document score
+    # weighting
+    n_tfidf_weighted: Tuple[float] = attr.ib()  # with tf/idf weighting
+    n_tf_weighted:    Tuple[float] = attr.ib()  # with tf weighting
 
-    unknown_ratio:  Tuple[float] = attr.ib()  # absolute reduction value
-    common_unknown:     Set[str] = attr.ib()  # tokens shared
+    a_tfs:      Tuple[np.array] = attr.ib()  # raw tf values
+    a_idfs:     Tuple[np.array] = attr.ib()  # raw idf values
+    a_weighted: Tuple[np.array] = attr.ib()  # distances weighted
+
+    # common unknown
+    n_scores:         Tuple[float] = attr.ib()  # per-document score (inverse)
+    n_unknown_ratio:  Tuple[float] = attr.ib()  # absolute reduction value
+    common_unknown:       Set[str] = attr.ib()  # tokens shared
 
     # ---
 
     def __attrs_post_init__(self):
         for i in (0, 1):
-            assert len(self.docs[i].tokens) == len(self.idxs[i])
-            assert len(self.docs[i].tokens) == len(self.dists[i])
-            assert len(self.docs[i].tokens) == len(self.freqs[i])
-            assert len(self.docs[i].tokens) == len(self.idfs[i])
+            assert len(self.docs[i].tokens) == len(self.a_idxs[i])
+            assert len(self.docs[i].tokens) == len(self.a_tfs[i])
+            assert len(self.docs[i].tokens) == len(self.a_idfs[i])
+            assert len(self.docs[i].tokens) == len(self.a_weighted[i])
 
     def _draw_border(self, s: str) -> str:
         lines = s.splitlines()
@@ -503,54 +539,68 @@ class Score:
         mid = [midfmt % s for s in lines]
         return '\n'.join([first] + mid + [last])
 
+    def _str_common_unknown(self, docbuf: List[str], doc) -> None:
+        docbuf.append('\n')
+        docbuf.append('Common unknown words:\n')
+        headers = ('token', 'count')
+        tab_data = [(tok, doc.unknown[tok])
+                    for tok in self.common_unknown]
+
+        unknown_table = tabulate(tab_data, headers=headers)
+        docbuf.append(unknown_table)
+
     def __str__(self) -> str:
         sbuf = [f'\nWMD SCORE : {self.value}\n']
-
-        for a, b in ((0, 1), (1, 0)):
-            docbuf = []
-
-            doc1, doc2 = self.docs[a], self.docs[b]
-            docbuf.append(f'\ncomparing: "{doc1.name}" to "{doc2.name}"')
-            docbuf.append(f'score: {self.scores[a]:.4f}' +
-                          f' = 1 - {self.weighted[a]:.4f}' +
-                          f' * {self.unknown_ratio[a]:.4f}\n')
-
-            headers = ['token', 'neighbour', 'distance', 'tf', 'nr-idf']
-
-            tab_data = list(zip(
-                doc1.tokens, [doc2.tokens[idx] for idx in self.idxs[a]],
-                self.dists[a], self.freqs[a], self.idfs[a]))
-
-            tab_data.sort(key=lambda t: t[2])
-
-            # add weighted
-            weight_row = (
-                'weighted score\n-', '',
-                self.dist_weighted[a],
-                self.freq_weighted[a],
-                self.weighted[a])
-
-            tab_data.insert(0, weight_row)
-
-            dist_table = tabulate(
-                tab_data, headers=headers,
-                showindex='always', floatfmt=".4f")
-
-            docbuf.append(dist_table)
-            docbuf.append('\n')
-
-            docbuf.append('Common unknown words:\n')
-            headers = ('token', 'count')
-            tab_data = [(tok, doc1.unknown[tok])
-                        for tok in self.common_unknown]
-
-            unknown_table = tabulate(tab_data, headers=headers)
-            docbuf.append(unknown_table)
-
-            docstr = '\n'.join(docbuf)
-            sbuf.append(self._draw_border(docstr) + '\n')
-
+        sbuf.append(self.docstr(first=True) + '\n')
+        sbuf.append(self.docstr(first=False) + '\n')
         return '\n'.join(sbuf)
+
+    def docstr(self, first: bool = True) -> str:
+        a, b = (0, 1) if first else (1, 0)
+        doc1, doc2 = self.docs[a], self.docs[b]
+
+        docbuf = []
+
+        # docbuf.append(f'\ncomparing: "{doc1.name}" to "{doc2.name}"')
+        # docbuf.append(f'score: {self.scores[a]:.4f}' +
+        #               f' = 1 - {self.weighted[a]:.4f}' +
+        #               f' * {self.unknown_ratio[a]:.4f}\n')
+
+        headers = ['no', 'token', 'neighbour', 'dist', 'weighted dist',
+                   'tf', 'nr-idf', ]
+
+        tab_data = list(zip(
+            doc1.tokens,
+            [doc2.tokens[idx] for idx in self.a_idxs[a]],
+            self.a_dists[a],
+            self.a_weighted[a],
+            self.a_tfs[a],
+            self.a_idfs[a]))
+
+        tab_data.sort(key=lambda t: t[2])
+
+        # add means
+        # weight_row = (
+        #     'weighted score\n-', '',
+        #     self.n_dists[a],
+        #     self.n_tf_weighted[a],
+        #     self.n_tfidf_weighted[a])
+
+        # tab_data.insert(0, weight_row)
+
+        dist_table = tabulate(
+            tab_data, headers=headers,
+            showindex='always', floatfmt=".4f")
+
+        docbuf.append(dist_table)
+
+        # older versions do not contain this information
+        try:
+            self._str_common_unknown(docbuf, doc1)
+        except AttributeError:
+            docbuf.append('No common unknown word information\n')
+
+        return self._draw_border('\n'.join(docbuf))
 
 
 class Strategy(enum.Enum):
@@ -570,7 +620,7 @@ class Strategy(enum.Enum):
     ADAPTIVE_BIG = enum.auto()
 
 
-def _dist_distances(doc1, doc2):
+def _dist_distances(doc1, doc2, verbose: bool):
     # Compute the distance matrix.
     T = distance_matrix_lookup(doc1, doc2)
 
@@ -603,55 +653,75 @@ def _dist_distances(doc1, doc2):
     # --- mapping
 
     dists = doc1_dists, doc2_dists
-    idxs = doc1_idx, doc2_idx
-    dist_weighted = doc1_dists.mean(), doc2_dists.mean()
+    dist_mapping = None
 
-    return dists, T, idxs, dist_weighted
+    if verbose:
+        dist_mapping = dict(
+            T=T,
+            a_idxs=(doc1_idx, doc2_idx),
+            a_dists=(doc1_dists, doc2_dists),
+            n_dists=(doc1_dists.mean(), doc2_dists.mean()), )
+
+    return dists, dist_mapping
 
 
 def _dist_weighted(
         doc1: Doc, doc2: Doc,
         a_dist1: np.array, a_dist2: np.array,
-        idf: bool = False, db: Database = None, ):
+        verbose: bool,
+        idf: bool = False,
+        db: Database = None, ):
 
-    idf1 = np.ones(len(doc1))
-    idf2 = np.ones(len(doc2))
+    a_idf1 = np.ones(len(doc1))
+    a_idf2 = np.ones(len(doc2))
 
     if idf:
         assert db
 
-        df1 = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
-        df2 = np.array([db.docref.docfreqs[idx] for idx in doc2.idx])
+        a_df1 = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
+        a_df2 = np.array([db.docref.docfreqs[idx] for idx in doc2.idx])
 
         # very infrequent terms are close to 0,
         # very frequent terms close to 1
-        idf1: np.array = np.log(df1) / np.log(len(db.mapping))
-        idf2: np.array = np.log(df2) / np.log(len(db.mapping))
+        a_idf1: np.array = 1 - np.log(a_df1) / np.log(len(db.mapping))
+        a_idf2: np.array = 1 - np.log(a_df2) / np.log(len(db.mapping))
 
-    a_idf1: np.array = (a_dist1 + idf1) / 2
-    a_idf2: np.array = (a_dist2 + idf2) / 2
+    a_weighted_doc1 = a_dist1 * doc1.freq * a_idf1
+    a_weighted_doc2 = a_dist1 * doc2.freq * a_idf2
 
-    doc1_weighted = (a_idf1 * doc1.cnt).sum()
-    doc2_weighted = (a_idf2 * doc2.cnt).sum()
+    n_dist_weighted_doc1 = a_weighted_doc1.sum()
+    n_dist_weighted_doc2 = a_weighted_doc2.sum()
 
     # --- checking
 
-    assert 0 <= doc1_weighted and doc1_weighted <= 1
-    assert 0 <= doc2_weighted and doc2_weighted <= 1
+    assert 0 <= n_dist_weighted_doc1 and n_dist_weighted_doc1 <= 1
+    assert 0 <= n_dist_weighted_doc1 and n_dist_weighted_doc2 <= 1
 
     # --- mapping
 
-    weighted = doc1_weighted, doc2_weighted
-    idfs = idf1, idf2
-    freqs = doc1.cnt, doc2.cnt
-    freq_weighted = (a_dist1 * doc1.cnt).sum(), (a_dist2 * doc2.cnt).sum()
+    weighted = n_dist_weighted_doc1, n_dist_weighted_doc2
+    weighted_mapping = None
 
-    return weighted, idfs, freqs, freq_weighted
+    if verbose:
+        n_tf_weighted_doc1 = (a_dist1 * doc1.freq).sum()
+        n_tf_weighted_doc2 = (a_dist2 * doc2.freq).sum()
+
+        weighted_mapping = dict(
+            n_tf_weighted=(n_tf_weighted_doc1, n_tf_weighted_doc2),
+            n_tfidf_weighted=weighted,
+
+            a_tfs=(doc1.freq, doc2.freq),
+            a_idfs=(a_idf1, a_idf2),
+            a_weighted=(a_weighted_doc1, a_weighted_doc2),
+        )
+
+    return weighted, weighted_mapping
 
 
 def _dist_unknown(
         doc1: Doc, doc2: Doc,
-        doc1_weighted: float, doc2_weighted: float):
+        doc1_weighted: float, doc2_weighted: float,
+        verbose: bool):
 
     # Include terms not found in the code database: an exact match
     # would produce a T[i, j] = 0 value which results in its frequency
@@ -681,9 +751,14 @@ def _dist_unknown(
     # --- mapping
 
     scores = doc1_score, doc2_score
-    unknown_ratio = doc1_unknown_ratio, doc2_unknown_ratio
+    unknown_mapping = None
 
-    return scores, unknown_ratio, common_unknown
+    if verbose:
+        unknown_mapping = dict(
+            n_unknown_ratio=(doc1_unknown_ratio, doc2_unknown_ratio),
+            common_unknown=common_unknown, )
+
+    return scores, unknown_mapping
 
 
 def _dist_select(
@@ -727,18 +802,19 @@ def dist(
     """
 
     docs = doc1, doc2
+    idf = dict(idf=idf, db=db)
 
     # retrieve hamming distance vectors for each word to each
     # corresponding nearest neighbour for both directions
-    dists, *dist_data = _dist_distances(*docs)
+    dists, dist_mapping = _dist_distances(*docs, verbose)
 
     # reduce the vectors to their means, weighted by the term
     # frequencies and optionally inverse document frequencies
-    weighted, *weighted_data = _dist_weighted(*docs, *dists, idf, db)
+    weighted, weighted_mapping = _dist_weighted(*docs, *dists, verbose, **idf)
 
     # factor in words that are not present in the vocabulary
     # by decreasing the distance score based on the frequency
-    scores, *unknown_data = _dist_unknown(*docs, *weighted)
+    scores, unknown_mapping = _dist_unknown(*docs, *weighted, verbose)
 
     # reverse the score such that higher is better
     scores = [1 - s for s in scores]
@@ -751,22 +827,15 @@ def dist(
         return score
 
     else:
-        # see respective '--- mapping' section
-        T, idxs, dist_weighted = dist_data
-        idfs, freqs, freq_weighted = weighted_data
-        unknown_ratio, common_unknown = unknown_data
+        # see respective '--- mapping' sections
 
         return Score(
-            value=score, T=T, docs=docs,
-            # token-wise values
-            idxs=idxs, dists=dists, freqs=freqs, idfs=idfs,
-            # reduced values
-            dist_weighted=dist_weighted,
-            freq_weighted=freq_weighted,
-            weighted=weighted,
-            unknown_ratio=unknown_ratio,
-            common_unknown=common_unknown,
-            scores=scores, )
+            value=score, docs=docs, **{
+                'strategy': strategy.name,
+                'n_scores': scores,
+                **dist_mapping,
+                **weighted_mapping,
+                **unknown_mapping, })
 
 
 #
