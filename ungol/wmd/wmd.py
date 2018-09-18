@@ -478,7 +478,7 @@ def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
 
 
 @attr.s
-class Score:
+class ScoreData:
     """
     This class explains the score if dist(verbose=True)
 
@@ -488,33 +488,25 @@ class Score:
 
     # given l1 = len(doc1), l2 = len(doc2)
 
-    value:   float = attr.ib()  # based on the strategy
+    score:   float = attr.ib()  # based on the strategy
 
     # all values are length 2 tuples
 
-    docs:  Tuple[Doc] = attr.ib()
-    strategy:     str = attr.ib()
+    docs: Tuple[Doc] = attr.ib()
+    strategy: str = attr.ib()
+    common_unknown: Set[str] = attr.ib()  # tokens shared
 
-    # distances
-    T:         np.ndarray = attr.ib()  # distance matrix
-    n_dists: Tuple[float] = attr.ib()  # without tf/idf weighting
+    T:            np.ndarray = attr.ib()  # distance matrix
+    n_sims:     Tuple[float] = attr.ib()  # raw similarity
+    n_weighted: Tuple[float] = attr.ib()  # with weighting (idf)
+    n_scores:   Tuple[float] = attr.ib()  # per-document score
 
-    a_idxs:     Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
-    a_dists:    Tuple[np.array] = attr.ib()  # raw distance values
-
-    # weighting
-    n_tfidf_weighted: Tuple[float] = attr.ib()  # with tf/idf weighting
-    n_tf_weighted:    Tuple[float] = attr.ib()  # with tf weighting
+    a_idxs: Tuple[np.array] = attr.ib()  # ((l1, ), (l2, ))
+    a_sims: Tuple[np.array] = attr.ib()  # raw distance values
 
     a_tfs:      Tuple[np.array] = attr.ib()  # raw tf values
     a_idfs:     Tuple[np.array] = attr.ib()  # raw idf values
     a_weighted: Tuple[np.array] = attr.ib()  # distances weighted
-
-    # common unknown
-    n_reduced:        Tuple[float] = attr.ib()  # common unknown ratio weighted
-    n_scores:         Tuple[float] = attr.ib()  # per-document score
-    n_unknown_ratio:  Tuple[float] = attr.ib()  # absolute reduction value
-    common_unknown:       Set[str] = attr.ib()  # tokens shared
 
     # ---
 
@@ -540,84 +532,69 @@ class Score:
         mid = [midfmt % s for s in lines]
         return '\n'.join([first] + mid + [last])
 
-    def _str_common_unknown(self, docbuf: List[str], doc) -> None:
+    def _str_common_unknown(self, docbuf: List[str], a: int) -> None:
         docbuf.append('\n')
         docbuf.append('Common unknown words:\n')
         headers = ('token', 'count')
-        tab_data = [(tok, doc.unknown[tok])
+        tab_data = [(tok, self.docs[a].unknown[tok])
                     for tok in self.common_unknown]
 
         unknown_table = tabulate(tab_data, headers=headers)
         docbuf.append(unknown_table)
 
+    def _str_sim_table(self, docbuf: List[str], a: int, b: int) -> None:
+        headers = ('no', 'token', 'neighbour', 'sim', 'f(sim)',
+                   'tf', 'idf', )
+
+        doc1, doc2 = self.docs[a], self.docs[b]
+
+        tab_data = list(zip(
+            doc1.tokens,
+            [doc2.tokens[idx] for idx in self.a_idxs[a]],
+            self.a_sims[a],
+            self.a_weighted[a],
+            self.a_tfs[a],
+            self.a_idfs[a], ))
+
+        tab_data.sort(key=lambda t: t[2], reverse=True)
+
+        sims_table = tabulate(
+            tab_data, headers=headers,
+            showindex='always', floatfmt=".4f")
+
+        docbuf.append(sims_table)
+
+    def _str_score_table(self, docbuf: List[str], a: int, b: int) -> None:
+        name1, name2 = self.docs[a].name, self.docs[b].name
+        docbuf.append(f'\ncomparing: "{name1}" to "{name2}"\n')
+
+        headers, tab_data = zip(*(
+            ('', 'score:'),
+            ('similarity', self.n_sims[a]),
+            ('weighted', self.n_weighted[a]),
+            ('score', self.n_scores[a]), ))
+
+        docbuf.append(tabulate([tab_data], headers=headers))
+        docbuf += ['', '']
+
     def __str__(self) -> str:
-        sbuf = [f'\nWMD SCORE : {self.value}\n']
+        sbuf = [f'\nWMD SCORE : {self.score}']
+        sbuf.append(f'selection strategy: {self.strategy}\n')
         sbuf.append(self.docstr(first=True) + '\n')
         sbuf.append(self.docstr(first=False) + '\n')
         return '\n'.join(sbuf)
 
     def docstr(self, first: bool = True) -> str:
         a, b = (0, 1) if first else (1, 0)
-        doc1, doc2 = self.docs[a], self.docs[b]
 
         docbuf = []
 
-        docbuf.append(f'\ncomparing: "{doc1.name}" to "{doc2.name}"\n')
-        docbuf.append(f'score = {self.n_scores[a]:.4f} = ' +
-                      f'1 - {self.n_reduced[a]:.4f}')
-        docbuf.append('unknown ratio: {:.2f}%'.format(
-            self.n_unknown_ratio[a] * 100))
-
-        docbuf.append('')
-
-        headers, tab_data = zip(*(
-            ('', 'score:'),
-            ('dist', self.n_dists[a]),
-            ('tf', self.n_tf_weighted[a]),
-            ('tf-idf', self.n_tfidf_weighted[a]),
-            ('unknown', self.n_reduced[a])))
-
-        docbuf.append(tabulate([tab_data], headers=headers, floatfmt='.4f'))
-        docbuf.append('\n')
-
-        # ---
-
-        headers = ('no', 'token', 'neighbour', 'dist', 'f(dist)',
-                   'tf', 'idf', )
-
-        tab_data = list(zip(
-            doc1.tokens,
-            [doc2.tokens[idx] for idx in self.a_idxs[a]],
-            self.a_dists[a],
-            self.a_weighted[a],
-            self.a_tfs[a],
-            self.a_idfs[a], ))
-
-        tab_data.sort(key=lambda t: t[2])
-
-        # add means
-        weight_row = (
-            'mean:\n-', '',
-            self.a_dists[a].mean(),
-            0,
-            self.a_tfs[a].mean(),
-            self.a_idfs[a].mean(), )
-
-        tab_data.insert(0, weight_row)
-
-        dist_table = tabulate(
-            tab_data, headers=headers,
-            showindex='always', floatfmt=".4f")
-
-        docbuf.append(dist_table)
-
-        # older versions do not contain this information
-        try:
-            self._str_common_unknown(docbuf, doc1)
-        except AttributeError:
-            docbuf.append('No common unknown word information')
+        self._str_score_table(docbuf, a, b)
+        self._str_sim_table(docbuf, a, b)
+        self._str_common_unknown(docbuf, a)
 
         docbuf += ['', '']
+
         return self._draw_border('\n'.join(docbuf))
 
 
@@ -811,7 +788,7 @@ def dist_legacy(
         # ----------------------------------------
         strategy: Strategy = Strategy.MAX,
         idf: bool = False, db: Database = None,
-        verbose: bool = False, ) -> Union[float, Score]:
+        verbose: bool = False, ) -> Union[float, ScoreData]:
     """
 
     Calculate the RWMD score based on hamming distances for two
@@ -853,7 +830,7 @@ def dist_legacy(
     else:
         # see respective '--- mapping' sections
 
-        return Score(
+        return ScoreData(
             value=score, docs=docs, **{
                 'strategy': strategy.name,
                 'n_reduced': reduced,
@@ -877,7 +854,7 @@ def dist_legacy(
 #
 #    - prefixes: s_* for str, a_* for np.array, n_ for scalars
 #
-def _dist(db: Database, doc1: Doc, doc2: Doc) -> float:
+def _similarity(db: Database, doc1: Doc, doc2: Doc, verbose: bool) -> float:
 
     # ----------------------------------------
     # this is the important part
@@ -886,14 +863,17 @@ def _dist(db: Database, doc1: Doc, doc2: Doc) -> float:
     # Compute the distance matrix.
     T = distance_matrix_lookup(doc1, doc2)
 
-    doc1_idx = np.argmin(T, axis=1)
-    doc2_idx = np.argmin(T.T, axis=1)
+    doc1_idxs = np.argmin(T, axis=1)
+    doc2_idxs = np.argmin(T.T, axis=1)
 
     # Select the nearest neighbours per file Note: this returns the
     # _first_ occurence if there are multiple codes with the same
-    # distance (not important for further computation...)
-    a_dists1 = T[np.arange(T.shape[0]), doc1_idx]
-    a_dists2 = T.T[np.arange(T.shape[1]), doc2_idx]
+    # distance (not important for further computation...)  This value
+    # is inverted to further work with 'similarity' instead of
+    # distance (lead to confusion formerly as to where distance ended
+    # and similarity began)
+    a_sims1 = 1 - T[np.arange(T.shape[0]), doc1_idxs]
+    a_sims2 = 1 - T.T[np.arange(T.shape[1]), doc2_idxs]
 
     # ---  IDF
 
@@ -901,42 +881,57 @@ def _dist(db: Database, doc1: Doc, doc2: Doc) -> float:
         a_df = np.array([db.docref.docfreqs[idx] for idx in doc.idx])
         a_idf = np.log(len(db.mapping) / a_df)
         a_idf = a_idf / a_idf.sum()
+        return a_idf
 
-        return a_df, a_idf
+    a_idf1 = idf(doc1)
+    a_idf2 = idf(doc2)
 
-    a_df1, a_idf1 = idf(doc1)
-    a_df2, a_idf2 = idf(doc2)
+    # ---  COMMON OOV
+
+    # information currently unused.
+    common_unknown = doc1.unknown.keys() & doc2.unknown.keys()
 
     # ---  WEIGHTING
 
-    a_weighted_doc1 = a_dists1 * a_idf1
-    a_weighted_doc2 = a_dists2 * a_idf2
+    a_weighted_doc1 = a_sims1 * a_idf1
+    a_weighted_doc2 = a_sims2 * a_idf2
 
-    n_dist_weighted_doc1 = a_weighted_doc1.sum()
-    n_dist_weighted_doc2 = a_weighted_doc2.sum()
+    n_sim_weighted_doc1 = a_weighted_doc1.sum()
+    n_sim_weighted_doc2 = a_weighted_doc2.sum()
 
     # ---  FINAL SCORE
 
-    n_score1 = 1 - n_dist_weighted_doc1
-    n_score2 = 1 - n_dist_weighted_doc2
+    n_score1 = n_sim_weighted_doc1
+    n_score2 = n_sim_weighted_doc2
 
     #
     # the important part ends here
     # ----------------------------------------
 
-    # assertions
-    pass
+    if not verbose:
+        return n_score1, n_score2, None
 
-    # mapping if verbose=True
-    pass
+    # ---
 
-    # phew!
-    return n_score1, n_score2
+    # create data object for the scorer to explain itself
+    # look at this mess :(
+    return n_score1, n_score2, ScoreData(
+        score=None, strategy=None,  # set by similarity()
+        docs=(doc1, doc2), T=T,
+        n_sims=(a_sims1.mean(), a_sims2.mean()),
+        a_idxs=(doc1_idxs, doc2_idxs),
+        a_sims=(a_sims1, a_sims2),
+        n_weighted=(n_sim_weighted_doc1, n_sim_weighted_doc2),
+        a_tfs=(doc1.freq, doc2.freq),
+        a_idfs=(a_idf1, a_idf2),
+        a_weighted=(a_weighted_doc1, a_weighted_doc2),
+        n_scores=(n_score1, n_score2),
+        common_unknown=common_unknown)
 
 
-def dist(db: Database, s_doc1: str, s_doc2: str,
-         strategy: Strategy = Strategy.ADAPTIVE_SMALL,
-         verbose: bool = False) -> float:
+def similarity(db: Database, s_doc1: str, s_doc2: str,
+               strategy: Strategy = Strategy.ADAPTIVE_SMALL,
+               verbose: bool = False) -> Union[float, ScoreData]:
 
     assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
     assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
@@ -944,7 +939,7 @@ def dist(db: Database, s_doc1: str, s_doc2: str,
     # calculate score
 
     doc1, doc2 = db.mapping[s_doc1], db.mapping[s_doc2]
-    score1, score2 = _dist(db, doc1, doc2)
+    score1, score2, scoredata = _similarity(db, doc1, doc2, verbose)
 
     # select score based on a strategy
 
@@ -960,7 +955,11 @@ def dist(db: Database, s_doc1: str, s_doc2: str,
     elif strategy is Strategy.ADAPTIVE_BIG:
         score = score2 if len(doc1) < len(doc2) else score1
 
-    return score
+    if scoredata is not None:
+        scoredata.score = score
+        scoredata.strategy = strategy.name
+
+    return scoredata if verbose else score
 
 
 #
