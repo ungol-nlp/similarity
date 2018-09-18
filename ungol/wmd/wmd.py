@@ -670,7 +670,10 @@ def _dist_distances(doc1, doc2, verbose: bool):
 
     # --- mapping
 
-    dists = doc1_dists, doc2_dists
+    dists = (
+        doc1_dists[:np.argmax(doc1_dists > 0.3)],
+        doc2_dists[:np.argmax(doc1_dists > 0.3)], )
+
     dist_mapping = None
 
     if verbose:
@@ -803,7 +806,7 @@ def _dist_select(
     return score
 
 
-def dist(
+def dist_legacy(
         doc1: Doc, doc2: Doc,
         # ----------------------------------------
         strategy: Strategy = Strategy.MAX,
@@ -858,6 +861,106 @@ def dist(
                 **dist_mapping,
                 **weighted_mapping,
                 **unknown_mapping, })
+
+
+#
+#  FIXME: speech about what I learned about ripping apart the calculation.
+#
+#  Progress:
+#
+#    - [X] re-implement status quo without noise
+#    - [ ] re-implement verbose=True
+#    - [ ] improve formula for world domination
+#    - [ ] adjust tests, add assertions
+#
+#  Notes:
+#
+#    - prefixes: s_* for str, a_* for np.array, n_ for scalars
+#
+def _dist(db: Database, doc1: Doc, doc2: Doc) -> float:
+
+    # ----------------------------------------
+    # this is the important part
+    #
+
+    # Compute the distance matrix.
+    T = distance_matrix_lookup(doc1, doc2)
+
+    doc1_idx = np.argmin(T, axis=1)
+    doc2_idx = np.argmin(T.T, axis=1)
+
+    # Select the nearest neighbours per file Note: this returns the
+    # _first_ occurence if there are multiple codes with the same
+    # distance (not important for further computation...)
+    a_dists1 = T[np.arange(T.shape[0]), doc1_idx]
+    a_dists2 = T.T[np.arange(T.shape[1]), doc2_idx]
+
+    # ---  IDF
+
+    def idf(doc) -> np.array:
+        a_df = np.array([db.docref.docfreqs[idx] for idx in doc.idx])
+        a_idf = np.log(len(db.mapping) / a_df)
+        a_idf = a_idf / a_idf.sum()
+
+        return a_df, a_idf
+
+    a_df1, a_idf1 = idf(doc1)
+    a_df2, a_idf2 = idf(doc2)
+
+    # ---  WEIGHTING
+
+    a_weighted_doc1 = a_dists1 * a_idf1
+    a_weighted_doc2 = a_dists2 * a_idf2
+
+    n_dist_weighted_doc1 = a_weighted_doc1.sum()
+    n_dist_weighted_doc2 = a_weighted_doc2.sum()
+
+    # ---  FINAL SCORE
+
+    n_score1 = 1 - n_dist_weighted_doc1
+    n_score2 = 1 - n_dist_weighted_doc2
+
+    #
+    # the important part ends here
+    # ----------------------------------------
+
+    # assertions
+    pass
+
+    # mapping if verbose=True
+    pass
+
+    # phew!
+    return n_score1, n_score2
+
+
+def dist(db: Database, s_doc1: str, s_doc2: str,
+         strategy: Strategy = Strategy.ADAPTIVE_SMALL,
+         verbose: bool = False) -> float:
+
+    assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
+    assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
+
+    # calculate score
+
+    doc1, doc2 = db.mapping[s_doc1], db.mapping[s_doc2]
+    score1, score2 = _dist(db, doc1, doc2)
+
+    # select score based on a strategy
+
+    if strategy is Strategy.MIN:
+        score = min(score1, score2)
+
+    if strategy is Strategy.MAX:
+        score = max(score1, score2)
+
+    elif strategy is Strategy.ADAPTIVE_SMALL:
+        score = score1 if len(doc1) < len(doc2) else score2
+
+    elif strategy is Strategy.ADAPTIVE_BIG:
+        score = score2 if len(doc1) < len(doc2) else score1
+
+    return score
 
 
 #
