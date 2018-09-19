@@ -534,6 +534,10 @@ class ScoreData:
 
     def _str_common_unknown(self, docbuf: List[str], a: int) -> None:
         docbuf.append('\n')
+        if not len(self.common_unknown):
+            docbuf.append('Common unknown words: None\n')
+            return
+
         docbuf.append('Common unknown words:\n')
         headers = ('token', 'count')
         tab_data = [(tok, self.docs[a].unknown[tok])
@@ -543,8 +547,7 @@ class ScoreData:
         docbuf.append(unknown_table)
 
     def _str_sim_table(self, docbuf: List[str], a: int, b: int) -> None:
-        headers = ('no', 'token', 'neighbour', 'sim', 'f(sim)',
-                   'tf', 'idf', )
+        headers = ('no', 'token', 'neighbour', 'sim', 'tf', 'idf', 'f(sim)')
 
         doc1, doc2 = self.docs[a], self.docs[b]
 
@@ -552,11 +555,11 @@ class ScoreData:
             doc1.tokens,
             [doc2.tokens[idx] for idx in self.a_idxs[a]],
             self.a_sims[a],
-            self.a_weighted[a],
             self.a_tfs[a],
-            self.a_idfs[a], ))
+            self.a_idfs[a],
+            self.a_weighted[a],))
 
-        tab_data.sort(key=lambda t: t[2], reverse=True)
+        tab_data.sort(key=lambda t: t[-1], reverse=True)
 
         sims_table = tabulate(
             tab_data, headers=headers,
