@@ -31,20 +31,7 @@ def _rhwmd_similarity(
     # this is the important part
     #
 
-    # Compute the distance matrix.
-    T = _rhwmd.distance_matrix_lookup(doc1, doc2)
-
-    doc1_idxs = np.argmin(T, axis=1)
-    doc2_idxs = np.argmin(T.T, axis=1)
-
-    # Select the nearest neighbours per file Note: this returns the
-    # _first_ occurence if there are multiple codes with the same
-    # distance (not important for further computation...)  This value
-    # is inverted to further work with 'similarity' instead of
-    # distance (lead to confusion formerly as to where distance ended
-    # and similarity began)
-    a_sims1 = 1 - T[np.arange(T.shape[0]), doc1_idxs]
-    a_sims2 = 1 - T.T[np.arange(T.shape[1]), doc2_idxs]
+    a_sims, a_idxs = _rhwmd.retrieve_nn(doc1, doc2)
 
     # phony
     # a_sims1 = np.ones(doc1_idxs.shape[0])
@@ -87,8 +74,8 @@ def _rhwmd_similarity(
     a_idf1_norm = a_idf1 / a_idf1.sum()
     a_idf2_norm = a_idf2 / a_idf2.sum()
 
-    a_weighted_doc1, n_score1 = weighted(a_sims1, a_idf1_norm)
-    a_weighted_doc2, n_score2 = weighted(a_sims2, a_idf2_norm)
+    a_weighted_doc1, n_score1 = weighted(a_sims[0], a_idf1_norm)
+    a_weighted_doc2, n_score2 = weighted(a_sims[1], a_idf2_norm)
 
     # assert 0 <= n_sim_weighted_doc1 and n_sim_weighted_doc1 <= 1
     # assert 0 <= n_sim_weighted_doc2 and n_sim_weighted_doc2 <= 1
@@ -105,7 +92,7 @@ def _rhwmd_similarity(
     # create data object for the scorer to explain itself.
     # the final score is set by the caller.
     scoredata = stats.ScoreData(
-        name='hr-wmd', score=None, docs=(doc1, doc2),
+        name='rh-wmd', score=None, docs=(doc1, doc2),
         common_unknown=common_unknown)
 
     # ---
@@ -121,10 +108,10 @@ def _rhwmd_similarity(
 
     scoredata.add_local_column(
         'nn',
-        np.array(doc2.tokens)[doc1_idxs],
-        np.array(doc1.tokens)[doc2_idxs], )
+        np.array(doc2.tokens)[a_idxs[0]],
+        np.array(doc1.tokens)[a_idxs[1]], )
 
-    scoredata.add_local_column('sim', a_sims1, a_sims2)
+    scoredata.add_local_column('sim', *a_sims)
     scoredata.add_local_column('tf', doc1.freq, doc2.freq)
     scoredata.add_local_column('idf', a_idf1, a_idf2)
     scoredata.add_local_column('weight', a_weighted_doc1, a_weighted_doc2)
@@ -180,6 +167,16 @@ def rhwmd(db: wmd.Database, s_doc1: str, s_doc2: str,
 #  OKAPI BM25 |----------------------------------------
 #
 #
+def _bm25_normalization(a_tf, n_len: int, k1: float, b: float):
+    # calculate numerator
+    a_num = (k1 + 1) * a_tf
+
+    # calculate denominator
+    a_den = k1 * ((1-b) + b * n_len) + a_tf
+
+    return a_num / a_den
+
+
 def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
     ref = db.docref
 
@@ -207,15 +204,10 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
     a_tf = doc2.cnt[np.nonzero(a_common_idx[:, None] == doc2.idx)[1]]
     assert len(a_tf) == len(common)
 
-    # calculate numerator
-    a_num = (k1 + 1) * a_tf
-
-    # calculate denominator
     n_len = len(doc2) / db.avg_doclen
-    a_den = k1 * ((1-b) + b * n_len) + a_tf
+    a_norm = _bm25_normalization(a_tf, n_len, k1, b)
 
     # weight each idf value
-    a_res = a_idf * a_num / a_den
+    a_res = a_idf * a_norm
 
     return a_res.sum()
-
