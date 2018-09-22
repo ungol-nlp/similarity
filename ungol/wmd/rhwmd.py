@@ -177,4 +177,18 @@ def retrieve_nn(doc1: wmd.Doc, doc2: wmd.Doc):
     a_sims1 = 1 - T[np.arange(T.shape[0]), doc1_idxs]
     a_sims2 = 1 - T.T[np.arange(T.shape[1]), doc2_idxs]
 
-    return (a_sims1, a_sims2), (doc1_idxs, doc2_idxs)
+    a_sims = a_sims1, a_sims2
+
+    # transform
+    # G = 1
+    # a_sims = tuple((np.e ** (a * G)) / np.e ** G for a in (a_sims1, a_sims2))
+
+    # G = 1.8
+    # a_sims = tuple((G * a - G) for a in (a_sims1, a_sims2))
+    # for a in a_sims:
+    #     a[a < 0] = 0
+
+    # from tabulate import tabulate
+    # print(tabulate(zip(a_sims1, a_sims[0])))
+
+    return a_sims, (doc1_idxs, doc2_idxs)
