@@ -7,7 +7,14 @@ from ungol.wmd import rhwmd as _rhwmd
 
 import numpy as np
 
-from typing import Union
+
+Strategy = _rhwmd.Strategy
+
+
+def _get_docs(db: wmd.Database, s_doc1: str, s_doc2: str):
+    assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
+    assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
+    return db.mapping[s_doc1], db.mapping[s_doc2]
 
 
 # --- DISTANCE SCHEMES
@@ -18,7 +25,7 @@ from typing import Union
 #
 #
 #
-#  FIXME: speech about what I learned about ripping apart the calculation.
+#  TODO: speech about what I learned about ripping apart the calculation.
 #  Notes:
 #    - prefixes: s_* for str, a_* for np.array, n_ for scalars
 #
@@ -47,11 +54,8 @@ def _rhwmd_similarity(
     # ---  IDF
 
     def idf(doc) -> np.array:
-        a_known_df = np.array([db.docref.docfreqs[idx] for idx in doc.idx])
-        a_df = np.hstack((a_unknown, a_known_df))
-
+        a_df = np.hstack((a_unknown, np.array(doc.docfreqs)))
         N = len(db.mapping)  # FIXME add unknown tokens
-
         a_idf = np.log(N / a_df)
         return a_idf
 
@@ -118,41 +122,26 @@ def _rhwmd_similarity(
 
     return n_score1, n_score2, scoredata
 
-    #     n_sims=(a_sims1.mean(), a_sims2.mean()),
-
-    #     a_idxs=(doc1_idxs, doc2_idxs),
-    #     n_weighted=(n_sim_weighted_doc1, n_sim_weighted_doc2),
-    #     a_tfs=(doc1.freq, doc2.freq),
-    #     a_idfs=(a_idf1[U:], a_idf2[U:]),
-    #     a_weighted=(a_weighted_doc1[U:], a_weighted_doc2[U:]),
-    #     n_scores=(n_score1, n_score2),
-    #     common_unknown=common_unknown)
-
 
 def rhwmd(db: wmd.Database, s_doc1: str, s_doc2: str,
-          strategy: _rhwmd.Strategy = _rhwmd.Strategy.ADAPTIVE_SMALL,
-          verbose: bool = False) -> Union[float, stats.ScoreData]:
+          strategy: Strategy = Strategy.ADAPTIVE_SMALL,
+          verbose: bool = False):
 
-    assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
-    assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
-
-    # calculate score
-
-    doc1, doc2 = db.mapping[s_doc1], db.mapping[s_doc2]
+    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
     score1, score2, scoredata = _rhwmd_similarity(db, doc1, doc2, verbose)
 
     # select score based on a strategy
 
-    if strategy is _rhwmd.Strategy.MIN:
+    if strategy is Strategy.MIN:
         score = min(score1, score2)
 
-    if strategy is _rhwmd.Strategy.MAX:
+    if strategy is Strategy.MAX:
         score = max(score1, score2)
 
-    elif strategy is _rhwmd.Strategy.ADAPTIVE_SMALL:
+    elif strategy is Strategy.ADAPTIVE_SMALL:
         score = score1 if len(doc1) < len(doc2) else score2
 
-    elif strategy is _rhwmd.Strategy.ADAPTIVE_BIG:
+    elif strategy is Strategy.ADAPTIVE_BIG:
         score = score2 if len(doc1) < len(doc2) else score1
 
     if scoredata is not None:
@@ -170,23 +159,14 @@ def rhwmd(db: wmd.Database, s_doc1: str, s_doc2: str,
 def _bm25_normalization(a_tf, n_len: int, k1: float, b: float):
     # calculate numerator
     a_num = (k1 + 1) * a_tf
-
     # calculate denominator
     a_den = k1 * ((1-b) + b * n_len) + a_tf
-
     return a_num / a_den
 
 
 def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
+    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
     ref = db.docref
-
-    assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
-    assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
-
-    #  this can be optimized performance wise,
-    # but i'll leave it for now
-
-    doc1, doc2 = db.mapping[s_doc1], db.mapping[s_doc2]
 
     # gather common tokens
     common = set(doc1.tokens) & set(doc2.tokens)
@@ -210,4 +190,27 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
     # weight each idf value
     a_res = a_idf * a_norm
 
+    return a_res.sum()
+
+
+#
+#
+#  RH-WMD-25 |----------------------------------------
+#
+#
+def rhwmd25(db: wmd.Database, s_doc1: str, s_doc2: str,
+            k1=1.56, b=0.45,
+            verbose: bool = False, ):
+
+    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
+    a_nn_sims, a_nn_idxs = _rhwmd.retrieve_nn(doc1, doc2)
+
+    a_df = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
+    a_idf = np.log(len(db.mapping) / a_df)
+    a_tf = np.array([doc2.cnt[i] for i in a_nn_idxs[0]])
+
+    n_len = len(doc2) / db.avg_doclen
+    a_norm = _bm25_normalization(a_tf, n_len, k1, b)
+
+    a_res = a_idf * a_norm * a_nn_sims[0]
     return a_res.sum()
