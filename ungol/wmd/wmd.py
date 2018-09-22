@@ -150,8 +150,22 @@ class Doc:
     # ---
 
     @property
-    def tokens(self) -> Tuple[str]:
+    def tokens(self) -> List[str]:
         return [self.ref.lookup[idx] for idx in self.idx]
+
+    @property
+    def docfreqs(self) -> List[int]:
+        return [self.ref.docfreqs[idx] for idx in self.idx]
+
+    @property
+    def dists(self) -> '(words, retained k distances)':
+        return self.ref.distmap[self.idx, ]
+
+    @property
+    def codes(self) -> '(words, bytes)':
+        return self.ref.codemap[self.idx, ]
+
+    # ---
 
     def __len__(self) -> int:
         return self.idx.shape[0]
@@ -201,14 +215,6 @@ class Doc:
 
         str_buf.append('')
         return '\n'.join(str_buf)
-
-    @property
-    def dists(self) -> '(words, retained k distances)':
-        return self.ref.distmap[self.idx, ]
-
-    @property
-    def codes(self) -> '(words, bytes)':
-        return self.ref.codemap[self.idx, ]
 
     @staticmethod
     def from_tokens(name: str, tokens: List[str], ref: DocReferences):
