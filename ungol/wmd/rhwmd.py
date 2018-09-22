@@ -156,3 +156,25 @@ def distance_matrix_lookup(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
 
     T = _hamming_lookup[C1 ^ C2].sum(axis=-1)
     return T / (doc1.codes.shape[1] * 8)
+
+
+# ---
+
+
+def retrieve_nn(doc1: wmd.Doc, doc2: wmd.Doc):
+    # Compute the distance matrix.
+    T = distance_matrix_lookup(doc1, doc2)
+
+    doc1_idxs = np.argmin(T, axis=1)
+    doc2_idxs = np.argmin(T.T, axis=1)
+
+    # Select the nearest neighbours per file Note: this returns the
+    # _first_ occurence if there are multiple codes with the same
+    # distance (not important for further computation...)  This value
+    # is inverted to further work with 'similarity' instead of
+    # distance (lead to confusion formerly as to where distance ended
+    # and similarity began)
+    a_sims1 = 1 - T[np.arange(T.shape[0]), doc1_idxs]
+    a_sims2 = 1 - T.T[np.arange(T.shape[1]), doc2_idxs]
+
+    return (a_sims1, a_sims2), (doc1_idxs, doc2_idxs)
