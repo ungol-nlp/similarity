@@ -8,9 +8,7 @@ import numpy as np
 from tqdm import tqdm as _tqdm
 from tabulate import tabulate
 
-import enum
 import pickle
-import pathlib
 import functools
 from collections import defaultdict
 
@@ -19,7 +17,6 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Tuple
-from typing import Union
 
 
 # ---
@@ -27,14 +24,6 @@ from typing import Union
 tqdm = functools.partial(_tqdm, ncols=80)
 
 # --- utility
-
-
-def bincount(x: int):
-    return bin(x).count('1')
-
-
-def basename(fname: str):
-    return pathlib.Path(fname).name
 
 
 def load_stopwords(f_stopwords: List[str] = None) -> Set[str]:
@@ -93,6 +82,7 @@ class DocReferences:
 
     termfreqs: Dict[int, int] = attr.ib(default=attr.Factory(dict))
     docfreqs:  Dict[int, int] = attr.ib(default=attr.Factory(dict))
+    unknown:   Dict[str, int] = attr.ib(default=attr.Factory(dict))  # FIXME
 
     # documents not added to the database
     skipped:        List[str] = attr.ib(default=attr.Factory(list))
@@ -164,7 +154,7 @@ class Doc:
         return [self.ref.lookup[idx] for idx in self.idx]
 
     def __len__(self) -> int:
-        return len(self.tokens)
+        return self.idx.shape[0]
 
     def __getitem__(self, key: int) -> Tuple[int, int, int]:
         return self.codes[key]
@@ -266,10 +256,27 @@ class Database:
     docref:   DocReferences = attr.ib()
     mapping: Dict[str, Doc] = attr.ib(default=attr.Factory(dict))
 
+    @property
+    def avg_doclen(self):
+        if self.valid:
+            return self._avg_doclen
+
+        print('recalculating avg doclen')
+        count = sum(len(d) for d in self.mapping.values())
+        self._avg_doclen = count / len(self.mapping)
+
+        self.valid = True
+        return self.avg_doclen
+
+    def __attrs_post_init__(self):
+        self.valid = False
+
     def __add__(self, doc: Doc):
         assert len(doc.idx), 'the document has no content'
         assert doc.name, 'document needs the name attribute set'
         assert doc.name not in self.mapping, f'"{doc.name}" already indexed'
+
+        self.valid = False
 
         for i, idx in enumerate(doc.idx):
             tf = self.docref.termfreqs
@@ -302,6 +309,9 @@ class Database:
 
         sbuf.append('  tokens: {}'.format(
             len(self.docref.termfreqs)))
+
+        sbuf.append('  avg. doc length: {:.5f}'.format(
+            self.avg_doclen))
 
         sbuf.append('  skipped: {}'.format(
             len(self.docref.skipped)))
@@ -344,134 +354,6 @@ class Database:
     def from_file(fname: str):
         with open(fname, 'rb') as fd:
             return pickle.load(fd)
-
-
-#
-#  -------------------- HAMMING CALCULATIONS
-#
-
-
-def _assert_hamming_input(code1, code2):
-    assert code1.shape == code2.shape
-    assert code1.dtype == np.uint8
-    assert len(code1.shape) == 1
-
-
-def hamming_bincount(code1: '(bits, )', code2: '(bits, )') -> int:
-    _assert_hamming_input(code1, code2)
-
-    dist = 0
-    for char in code1 ^ code2:
-        dist += bincount(char)
-
-    return dist
-
-
-def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
-    _assert_hamming_input(code1, code2)
-
-    mask = 1
-    dist = 0
-
-    for char in code1 ^ code2:
-        while char:
-            dist += char & mask
-            char >>= 1
-
-    return dist
-
-
-_hamming_lookup = np.array([bincount(x) for x in range(0x100)])
-
-
-def hamming_lookup(code1: '(bits, )', code2: '(bits, )') -> int:
-    _assert_hamming_input(code1, code2)
-    return _hamming_lookup[code1 ^ code2].sum()
-
-
-#
-#  -------------------- DISTANCE CALCULATIONS
-#
-
-
-def __print_distance_matrix(T, doc1, doc2):
-
-    # doc1: rows, doc2: columns
-    tab_data = [('', ) + tuple(doc2.tokens)]
-    for idx in range(len(doc1)):
-        word = (doc1.tokens[idx], )
-        dists = tuple(T[idx])
-        tab_data.append(word + dists)
-
-    print(tabulate(tab_data))
-
-
-def distance_matrix_loop(doc1: Doc, doc2: Doc) -> '(n1, n2)':
-
-    def _norm_dist(hamming_dist, c_bits: int, maxdist: int = None):
-        # clip too large distance
-        dist = min(hamming_dist, maxdist)
-
-        # normalize
-        normed = dist / min(c_bits, maxdist)
-
-        assert 0 <= normed and normed <= 1
-        return normed
-
-    # ---
-
-    n1, n2 = doc1.codes.shape[0], doc2.codes.shape[0]
-    T = np.zeros((n1, n2))
-    c_bits = doc1.codes.shape[1] * 8
-
-    # compute distance for every possible combination of words
-    for i in range(n1):
-        c1 = doc1[i]
-
-        for j in range(n2):
-            c2 = doc2[j]
-
-            hamming_dist = hamming_bincount(c1, c2)
-            normed = _norm_dist(hamming_dist, c_bits, 100)
-            T[i][j] = normed
-
-    return T
-
-
-# dmv: distance matrix vectorized
-
-
-_DMV_MESHGRID_SIZE = int(1e4)
-_dmv_meshgrid = np.meshgrid(
-    np.arange(_DMV_MESHGRID_SIZE),
-    np.arange(_DMV_MESHGRID_SIZE), )
-
-
-_dmv_vectorized_bincount = np.vectorize(lambda x: bin(x).count('1'))
-
-
-def distance_matrix_vectorized(doc1: Doc, doc2: Doc) -> '(n1, n2)':
-
-    idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
-    idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
-
-    C1 = doc1[idx_x]
-    C2 = doc2[idx_y]
-
-    T = _dmv_vectorized_bincount(C1 ^ C2).sum(axis=-1)
-    return T / (doc1.codes.shape[1] * 8)
-
-
-def distance_matrix_lookup(doc1: Doc, doc2: Doc) -> '(n1, n2)':
-
-    idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
-    idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
-
-    C1 = doc1[idx_x]
-    C2 = doc2[idx_y]
-
-    T = _hamming_lookup[C1 ^ C2].sum(axis=-1)
-    return T / (doc1.codes.shape[1] * 8)
 
 
 # ---
@@ -599,145 +481,6 @@ class ScoreData:
         docbuf += ['', '']
 
         return self._draw_border('\n'.join(docbuf))
-
-
-class Strategy(enum.Enum):
-
-    # selecting max(score(d1, d2), score(d2, d1))
-    MAX = enum.auto()
-
-    # selecting min(score(d1, d2), score(d2, d1))
-    MIN = enum.auto()
-
-    # only use score(ds, dl), where ds = argmin(|d1|, |d2|)
-    # and dl = argmax(|d1|, |d2|)
-    ADAPTIVE_SMALL = enum.auto()
-
-    # only use score(dl, ds), where ds = argmin(|d1|, |d2|)
-    # and dl = argmax(|d1|, |d2|)
-    ADAPTIVE_BIG = enum.auto()
-
-
-#
-#  FIXME: speech about what I learned about ripping apart the calculation.
-#
-#  Progress:
-#
-#    - [X] re-implement status quo without noise
-#    - [X] re-implement verbose=True
-#    - [ ] devise oov strategy
-#    - [ ] adjust tests, add assertions
-#
-#  Notes:
-#
-#    - prefixes: s_* for str, a_* for np.array, n_ for scalars
-#
-def _similarity(db: Database, doc1: Doc, doc2: Doc, verbose: bool) -> float:
-
-    # ----------------------------------------
-    # this is the important part
-    #
-
-    # Compute the distance matrix.
-    T = distance_matrix_lookup(doc1, doc2)
-
-    doc1_idxs = np.argmin(T, axis=1)
-    doc2_idxs = np.argmin(T.T, axis=1)
-
-    # Select the nearest neighbours per file Note: this returns the
-    # _first_ occurence if there are multiple codes with the same
-    # distance (not important for further computation...)  This value
-    # is inverted to further work with 'similarity' instead of
-    # distance (lead to confusion formerly as to where distance ended
-    # and similarity began)
-    a_sims1 = 1 - T[np.arange(T.shape[0]), doc1_idxs]
-    a_sims2 = 1 - T.T[np.arange(T.shape[1]), doc2_idxs]
-
-    # ---  IDF
-
-    def idf(doc) -> np.array:
-        a_df = np.array([db.docref.docfreqs[idx] for idx in doc.idx])
-        a_idf = np.log(len(db.mapping) / a_df)
-        a_idf = a_idf / a_idf.sum()
-        return a_idf
-
-    a_idf1 = idf(doc1)
-    a_idf2 = idf(doc2)
-
-    # ---  COMMON OOV
-
-    # information currently unused.
-    common_unknown = doc1.unknown.keys() & doc2.unknown.keys()
-
-    # ---  WEIGHTING
-
-    a_weighted_doc1 = a_sims1 * a_idf1
-    a_weighted_doc2 = a_sims2 * a_idf2
-
-    n_sim_weighted_doc1 = a_weighted_doc1.sum()
-    n_sim_weighted_doc2 = a_weighted_doc2.sum()
-
-    # ---  FINAL SCORE
-
-    n_score1 = n_sim_weighted_doc1
-    n_score2 = n_sim_weighted_doc2
-
-    #
-    # the important part ends here
-    # ----------------------------------------
-
-    if not verbose:
-        return n_score1, n_score2, None
-
-    # ---
-
-    # create data object for the scorer to explain itself
-    # look at this mess :(
-    return n_score1, n_score2, ScoreData(
-        score=None, strategy=None,  # set by similarity()
-        docs=(doc1, doc2), T=T,
-        n_sims=(a_sims1.mean(), a_sims2.mean()),
-        a_idxs=(doc1_idxs, doc2_idxs),
-        a_sims=(a_sims1, a_sims2),
-        n_weighted=(n_sim_weighted_doc1, n_sim_weighted_doc2),
-        a_tfs=(doc1.freq, doc2.freq),
-        a_idfs=(a_idf1, a_idf2),
-        a_weighted=(a_weighted_doc1, a_weighted_doc2),
-        n_scores=(n_score1, n_score2),
-        common_unknown=common_unknown)
-
-
-def similarity(db: Database, s_doc1: str, s_doc2: str,
-               strategy: Strategy = Strategy.ADAPTIVE_SMALL,
-               verbose: bool = False) -> Union[float, ScoreData]:
-
-    assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
-    assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
-
-    # calculate score
-
-    doc1, doc2 = db.mapping[s_doc1], db.mapping[s_doc2]
-    score1, score2, scoredata = _similarity(db, doc1, doc2, verbose)
-
-    # select score based on a strategy
-
-    if strategy is Strategy.MIN:
-        score = min(score1, score2)
-
-    if strategy is Strategy.MAX:
-        score = max(score1, score2)
-
-    elif strategy is Strategy.ADAPTIVE_SMALL:
-        score = score1 if len(doc1) < len(doc2) else score2
-
-    elif strategy is Strategy.ADAPTIVE_BIG:
-        score = score2 if len(doc1) < len(doc2) else score1
-
-    if scoredata is not None:
-        scoredata.score = score
-        scoredata.strategy = strategy.name
-
-    return scoredata if verbose else score
 
 
 #
