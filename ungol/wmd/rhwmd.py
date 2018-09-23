@@ -28,6 +28,9 @@ class Strategy(enum.Enum):
     # and dl = argmax(|d1|, |d2|)
     ADAPTIVE_BIG = enum.auto()
 
+    # score(d1, d2) + score(d2, d1)
+    SUM = enum.auto()
+
 
 #
 #  -------------------- HAMMING CALCULATIONS
