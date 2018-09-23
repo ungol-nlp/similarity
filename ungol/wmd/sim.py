@@ -59,10 +59,24 @@ def _rhwmd_similarity(
         a_idf = np.log(N / a_df)
         return a_idf
 
-    a_idf1 = idf(doc1)
-    a_idf2 = idf(doc2)
+    # --- idf combinations
 
-    # phony
+    a_idf_doc1 = idf(doc1)
+    a_idf_doc2 = idf(doc2)
+
+    a_idf_nn1 = a_idf_doc2[a_idxs[0]]
+    a_idf_nn2 = a_idf_doc1[a_idxs[1]]
+
+    # a_idf1 = a_idf_doc1 + a_idf_nn1
+    # a_idf2 = a_idf_doc2 + a_idf_nn2
+
+    # --- query idf
+
+    a_idf1 = a_idf_doc1
+    a_idf2 = a_idf_doc2
+
+    # --- phony
+
     # a_idf1 = np.ones(len(doc1)) / len(doc1)
     # a_idf2 = np.ones(len(doc2)) / len(doc2)
 
@@ -96,7 +110,7 @@ def _rhwmd_similarity(
     # create data object for the scorer to explain itself.
     # the final score is set by the caller.
     scoredata = stats.ScoreData(
-        name='rh-wmd', score=None, docs=(doc1, doc2),
+        name='rhwmd', score=None, docs=(doc1, doc2),
         common_unknown=common_unknown)
 
     # ---
@@ -116,7 +130,9 @@ def _rhwmd_similarity(
         np.array(doc1.tokens)[a_idxs[1]], )
 
     scoredata.add_local_column('sim', *a_sims)
-    scoredata.add_local_column('tf', doc1.freq, doc2.freq)
+    scoredata.add_local_column('tf(token)', doc1.freq, doc2.freq)
+    scoredata.add_local_column('idf(token)', a_idf_doc1, a_idf_doc2)
+    scoredata.add_local_column('idf(nn)', a_idf_nn1, a_idf_nn2)
     scoredata.add_local_column('idf', a_idf1, a_idf2)
     scoredata.add_local_column('weight', a_weighted_doc1, a_weighted_doc2)
 
@@ -144,6 +160,9 @@ def rhwmd(db: wmd.Database, s_doc1: str, s_doc2: str,
     elif strategy is Strategy.ADAPTIVE_BIG:
         score = score2 if len(doc1) < len(doc2) else score1
 
+    elif strategy is Strategy.SUM:
+        score = score1 + score2
+
     if scoredata is not None:
         scoredata.score = score
         scoredata.add_global_row('strategy', strategy.name)
@@ -164,12 +183,17 @@ def _bm25_normalization(a_tf, n_len: int, k1: float, b: float):
     return a_num / a_den
 
 
-def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
+def bm25(db: wmd.Database, s_doc1: str, s_doc2: str,
+         k1=1.56, b=0.45, verbose: bool = False):
+
     doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
     ref = db.docref
 
     # gather common tokens
     common = set(doc1.tokens) & set(doc2.tokens)
+    if not len(common):
+        return 0 if not verbose else stats.ScoreData(
+            name='bm25', score=0, docs=(doc1, doc2))
 
     # get code indexes
     a_common_idx = np.array([ref.vocabulary[t] for t in common])
@@ -181,6 +205,7 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
     a_idf = np.log(len(db.mapping) / a_df)
 
     # find corresponding token counts
+    # note: a[:, None] == np.array([a]).T
     a_tf = doc2.cnt[np.nonzero(a_common_idx[:, None] == doc2.idx)[1]]
     assert len(a_tf) == len(common)
 
@@ -189,8 +214,30 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str, k1=1.56, b=0.45):
 
     # weight each idf value
     a_res = a_idf * a_norm
+    score = a_res.sum()
 
-    return a_res.sum()
+    if not verbose:
+        return score
+
+    # ---
+
+    scoredata = stats.ScoreData(name='bm25', score=score, docs=(doc1, doc2), )
+
+    # to preserve order
+    a_common_words = np.array([ref.lookup[idx] for idx in a_common_idx])
+
+    col_data = (
+        ('token', a_common_words),
+        ('tf', a_tf),
+        ('df', a_df),
+        ('idf', a_idf),
+        ('norm', a_norm),
+        ('weight', a_res), )
+
+    for t in col_data:
+        scoredata.add_global_column(*t)
+
+    return scoredata
 
 
 #
@@ -203,14 +250,38 @@ def rhwmd25(db: wmd.Database, s_doc1: str, s_doc2: str,
             verbose: bool = False, ):
 
     doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
-    a_nn_sims, a_nn_idxs = _rhwmd.retrieve_nn(doc1, doc2)
+    (a_nn_sim, _), (a_nn_idx, _) = _rhwmd.retrieve_nn(doc1, doc2)
 
     a_df = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
     a_idf = np.log(len(db.mapping) / a_df)
-    a_tf = np.array([doc2.cnt[i] for i in a_nn_idxs[0]])
+    a_tf = np.array([doc2.cnt[i] for i in a_nn_idx])
 
     n_len = len(doc2) / db.avg_doclen
     a_norm = _bm25_normalization(a_tf, n_len, k1, b)
 
-    a_res = a_idf * a_norm * a_nn_sims[0]
-    return a_res.sum()
+    a_res = a_idf * a_norm * a_nn_sim
+    score = a_res.sum()
+
+    if not verbose:
+        return score
+
+    # ---
+
+    scoredata = stats.ScoreData(
+        name='rhwmd25', score=score, docs=(doc1, doc2),
+        common_unknown=set(), )
+
+    col_data = (
+        ('token', np.array(doc1.tokens)),
+        ('nn', np.array(doc2.tokens)[a_nn_idx]),
+        ('sims', a_nn_sim),
+        ('df(token)', a_df),
+        ('idf(token)', a_idf),
+        ('tf(nn)', a_tf),
+        ('norm(nn)', a_norm),
+        ('weight', a_res), )
+
+    for t in col_data:
+        scoredata.add_global_column(*t)
+
+    return scoredata
