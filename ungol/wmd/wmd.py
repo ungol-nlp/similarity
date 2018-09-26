@@ -487,39 +487,3 @@ class ScoreData:
         docbuf += ['', '']
 
         return self._draw_border('\n'.join(docbuf))
-
-
-#
-#  MOCKING SECTION - used by tests/benchmarks
-#
-
-
-def mock_codes(bytecount: int) -> Tuple['code1', 'code2']:
-    """
-    To test wmd.hamming_*
-    """
-    code1 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
-    code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
-    return code1, code2
-
-
-def mock_doc(n: int, bytecount: int = 32) -> Doc:
-    """
-    To test wmd.distance_matrix_*
-    """
-    codemap = (np.random.randn(n, bytecount) * 255).astype(dtype=np.uint8)
-    distmap = (np.random.randn(n, 1) * 255).astype(dtype=np.int)
-
-    idx = np.arange(n).astype(np.uint)
-    np.random.shuffle(idx)
-
-    vocab = {str(i): i for i in idx}
-
-    ref = DocReferences(
-        meta={'knn': [1]},
-        vocabulary=vocab,
-        codemap=codemap,
-        distmap=distmap, )
-
-    doc = Doc(idx=idx[:n], cnt=np.ones(n) / n, ref=ref)
-    return doc

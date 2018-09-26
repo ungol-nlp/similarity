@@ -6,6 +6,7 @@ import numpy as np
 from tabulate import tabulate
 
 import enum
+from typing import Tuple
 
 
 def bincount(x: int):
@@ -58,6 +59,8 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
 
     mask = 1
     dist = 0
+
+    # FIXME: can be faster not overwriting char (?)
 
     for char in code1 ^ code2:
         while char:
@@ -118,7 +121,8 @@ def distance_matrix_loop(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
         for j in range(n2):
             c2 = doc2[j]
 
-            hamming_dist = hamming_bincount(c1, c2)
+            hamming_dist = hamming_lookup(c1, c2)
+            # hamming_dist = hamming_bincount(c1, c2)
             normed = _norm_dist(hamming_dist, c_bits, 100)
             T[i][j] = normed
 
@@ -195,3 +199,39 @@ def retrieve_nn(doc1: wmd.Doc, doc2: wmd.Doc):
     # print(tabulate(zip(a_sims1, a_sims[0])))
 
     return a_sims, (doc1_idxs, doc2_idxs)
+
+
+#
+#  MOCKING SECTION - used by tests/benchmarks
+#
+
+
+def mock_codes(bytecount: int) -> Tuple['code1', 'code2']:
+    """
+    To test wmd.hamming_*
+    """
+    code1 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
+    code2 = (np.random.randn(bytecount) * 255).astype(dtype=np.uint8)
+    return code1, code2
+
+
+def mock_doc(n: int, bytecount: int = 32) -> wmd.Doc:
+    """
+    To test wmd.distance_matrix_*
+    """
+    codemap = (np.random.randn(n, bytecount) * 255).astype(dtype=np.uint8)
+    distmap = (np.random.randn(n, 1) * 255).astype(dtype=np.int)
+
+    idx = np.arange(n).astype(np.uint)
+    np.random.shuffle(idx)
+
+    vocab = {str(i): i for i in idx}
+
+    ref = wmd.DocReferences(
+        meta={'knn': [1]},
+        vocabulary=vocab,
+        codemap=codemap,
+        distmap=distmap, )
+
+    doc = wmd.Doc(idx=idx[:n], cnt=np.ones(n).astype(dtype=np.uint), ref=ref)
+    return doc

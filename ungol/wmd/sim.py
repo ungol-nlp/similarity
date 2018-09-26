@@ -285,3 +285,52 @@ def rhwmd25(db: wmd.Database, s_doc1: str, s_doc2: str,
         scoredata.add_global_column(*t)
 
     return scoredata
+
+
+#
+#
+#  TF-IDF |----------------------------------------
+#
+#
+def tfidf(db: wmd.Database, s_doc1: str, s_doc2: str, verbose: bool = False, ):
+
+    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
+
+    common = list(set(doc1.tokens) & set(doc2.tokens))
+    if not len(common):
+        return 0 if not verbose else stats.ScoreData(
+            name='tfidf', score=0, docs=(doc1, doc2))
+
+    # get code indexes
+    a_common_idx = np.array([db.docref.vocabulary[t] for t in common])
+
+    a_df = np.array([db.docref.docfreqs[idx] for idx in a_common_idx])
+    a_idf = np.log(len(db.mapping) / a_df)
+
+    mapping = np.hstack([np.where(doc2.idx == i) for i in a_common_idx])[0]
+    a_tf = np.array([doc2.cnt[i] for i in mapping])
+
+    a_res = a_idf * a_tf
+    score = a_res.sum()
+
+    if not verbose:
+        return score
+
+    # ---
+
+    scoredata = stats.ScoreData(
+        name='tfidf', score=score, docs=(doc1, doc2),
+        common_unknown=set(), )
+
+    col_data = (
+        ('token', np.array(common)),
+        ('idx', a_common_idx),
+        ('tf(token)', a_tf),
+        ('df(token)', a_df),
+        ('idf(token)', a_idf),
+        ('result', a_res, ), )
+
+    for t in col_data:
+        scoredata.add_global_column(*t)
+
+    return scoredata
