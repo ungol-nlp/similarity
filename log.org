@@ -1,5 +1,2 @@
 * UNGOL WMD - Captain's Log
 *
-** DONE <2018-08-28 Di> setup running skeleton
-** TODO <2018-08-31 Fr> calculate relative weight based on 10-nn hamming dist
-
