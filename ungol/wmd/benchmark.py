@@ -61,7 +61,7 @@ def _benchmark(title: str, tasks: List[Tuple[str]]):
     print(fmt.format(title, *REPS))
 
     assert all(len(args) == 3 for args in tasks)
-    with mp.Pool() as pool:
+    with mp.Pool(4) as pool:
         tab_data = pool.map(_run_worker, tasks)
 
     # tab_data = []
@@ -83,21 +83,21 @@ def _debug_setup(setup: str):
 
 def hamming_distance():
 
-    setup = 'from ungol.wmd import wmd\n'
-    setup += 'code1, code2 = wmd.mock_codes(32)'
+    setup = 'from ungol.wmd import rhwmd\n'
+    setup += 'code1, code2 = rhwmd.mock_codes(32)'
 
     _benchmark('hamming distance', [
 
         ('binary counting with bin()',
-         'wmd.hamming_bincount(code1, code2)',
+         'rhwmd.hamming_bincount(code1, code2)',
          setup, ),
 
         ('bitshifts with vanilla python',
-         'wmd.hamming_bitmask(code1, code2)',
+         'rhwmd.hamming_bitmask(code1, code2)',
          setup, ),
 
         ('lookup table',
-         'wmd.hamming_lookup(code1, code2)',
+         'rhwmd.hamming_lookup(code1, code2)',
          setup, ),
 
     ])
@@ -110,33 +110,34 @@ def distance_matrix():
 
     def gen_setup(*sizes: int):
         for n in sizes:
-            setup = 'from ungol.wmd import wmd\n'
-            setup += 'doc = wmd.mock_doc({n})'.format(n=n)
+            setup = 'from ungol.wmd import rhwmd\n'
+            setup += 'doc = rhwmd.mock_doc({n})'.format(n=n)
             yield n, setup
 
     benchmarks = []
-    for n, setup in gen_setup(10, 20, 30, 40, 50, 100):
+
+    for n, setup in gen_setup(*[x * 10 for x in range(13)]):
         benchmarks += [
 
             ('naive loop ({n} x {n})'.format(n=n),
-             'wmd.distance_matrix_loop(doc, doc)',
+             'rhwmd.distance_matrix_loop(doc, doc)',
              setup, ),
 
             ('vectorized numpy ({n} x {n})'.format(n=n),
-             'wmd.distance_matrix_vectorized(doc, doc)',
+             'rhwmd.distance_matrix_vectorized(doc, doc)',
              setup, ),
 
             ('numpy with lookup table ({n} x {n})'.format(n=n),
-             'wmd.distance_matrix_lookup(doc, doc)',
+             'rhwmd.distance_matrix_lookup(doc, doc)',
              setup, ),
 
         ]
 
-    for n, setup in gen_setup(500, 1000, 2000):
+    for n, setup in gen_setup(400, 500, 1000, 2000):
         benchmarks += [
 
             ('numpy with lookup table ({n} x {n})'.format(n=n),
-             'wmd.distance_matrix_lookup(doc, doc)',
+             'rhwmd.distance_matrix_lookup(doc, doc)',
              setup, ),
 
         ]
