@@ -57,24 +57,17 @@ def load_stopwords(f_stopwords: List[str] = None) -> Set[str]:
 
 
 @attr.s
-class DocReferences:
+class References:
     """
     To effectively separate shared memory from individual document
     information for Doc instances, this class wraps information shared
     by all documents.
-
-    TODO: currently, meta['knn'] and distmap must always be
-    provided. They are in fact completely optional -> so make them
-    default to None and handle this case downstream.
-
     """
 
     # see ungol.models.embcodr.load_codes_bin for meta
     meta:       Dict[str, Any] = attr.ib()
-    vocabulary: Dict[str, int] = attr.ib()
-
-    codemap: np.ndarray = attr.ib()  # (Vocabulary, bytes); np.uint8
-    distmap: np.ndarray = attr.ib()  # (Vocabulary, knn);   np.uint8
+    vocabulary: Dict[str, int] = attr.ib()  # (N, )
+    codemap:        np.ndarray = attr.ib()  # (N, bytes); np.uint8
 
     stopwords: Set[str] = attr.ib(default=attr.Factory(set))
 
@@ -110,20 +103,19 @@ class DocReferences:
     def from_files(
             f_codemap: str,  # usually codemap.h5 produced by embcodr
             f_vocab: str,    # pickled dictionary mapping str -> int
-            f_stopwords: List[str] = None):
+            f_stopwords: List[str] = None, ):
 
         with open(f_vocab, 'rb') as fd:
             vocab = pickle.load(fd)
 
-        meta, dists, codes = embcodr.load_codes_bin(f_codemap)
+        meta, codes = embcodr.load_codes_bin(f_codemap)
         stopwords = load_stopwords(f_stopwords)
 
-        return DocReferences(
+        return References(
             meta=meta,
             vocabulary=vocab,
-            stopwords=stopwords,
             codemap=codes,
-            distmap=dists)
+            stopwords=stopwords, )
 
 
 class DocumentEmptyException(Exception):
@@ -138,7 +130,7 @@ class Doc:
     cnt:  np.array = attr.ib()  # (n, ) word frequency counts
 #   freq: np,array = attr.ib()  # calculated by __attr_post_init__
 
-    ref:   DocReferences = attr.ib()
+    ref:   References = attr.ib()
 
     # optionally filled
     unknown:  Dict[str, int] = attr.ib(default=attr.Factory(dict))
@@ -158,11 +150,7 @@ class Doc:
         return [self.ref.docfreqs[idx] for idx in self.idx]
 
     @property
-    def dists(self) -> '(words, retained k distances)':
-        return self.ref.distmap[self.idx, ]
-
-    @property
-    def codes(self) -> '(words, bytes)':
+    def codes(self) -> np.ndarray:
         return self.ref.codemap[self.idx, ]
 
     # ---
@@ -184,9 +172,7 @@ class Doc:
 
         # shape checks
         assert len(self.tokens) == self.codes.shape[0]
-        assert len(self.tokens) == self.dists.shape[0]
         assert self.codes.shape[1] == self.ref.codemap.shape[1]
-        assert self.dists.shape[1] == self.ref.distmap.shape[1]
 
     def __str__(self):
         str_buf = ['Document: "{}"'.format(
@@ -195,13 +181,10 @@ class Doc:
         str_buf += ['tokens: {}, unknown: {}, unwanted: {}\n'.format(
             len(self), len(self.unknown), self.unwanted)]
 
-        header_knn = tuple('{}-nn'.format(k) for k in self.ref.meta['knn'])
-        header = ('word', 'term count', 'code sum', ) + header_knn
-
-        assert self.codes.shape[0] == self.dists.shape[0]
+        header = 'word', 'term count', 'code sum',
 
         tab_data = []
-        row_data = self.tokens, self.cnt, self.codes, self.dists
+        row_data = self.tokens, self.cnt, self.codes
         for token, cnt, code, dist in zip(*row_data):
             assert code.shape[0] == self.codes.shape[1]
             tab_data.append((token, cnt, code.sum()) + tuple(dist))
@@ -217,7 +200,7 @@ class Doc:
         return '\n'.join(str_buf)
 
     @staticmethod
-    def from_tokens(name: str, tokens: List[str], ref: DocReferences):
+    def from_tokens(name: str, tokens: List[str], ref: References):
 
         # partition tokens
         tok_known, tok_unknown, tok_unwanted = [], {}, 0
@@ -250,16 +233,16 @@ class Doc:
                    unknown=tok_unknown, unwanted=tok_unwanted)
 
     @staticmethod
-    def from_text(name: str, text: str, ref: DocReferences):
+    def from_text(name: str, text: str, ref: References):
         tokenize = nltk.word_tokenize
         tokens = tokenize(text.lower())
         return Doc.from_tokens(name, tokens, ref)
 
 
 @attr.s
-class Database:
+class Index:
 
-    docref:   DocReferences = attr.ib()
+    ref: References = attr.ib()
     mapping: Dict[str, Doc] = attr.ib(default=attr.Factory(dict))
 
     @property
@@ -285,11 +268,11 @@ class Database:
         self.valid = False
 
         for i, idx in enumerate(doc.idx):
-            tf = self.docref.termfreqs
+            tf = self.ref.termfreqs
             tf[idx] = tf.get(idx, 0) + doc.cnt[i]
 
         for idx in set(doc.idx):
-            df = self.docref.docfreqs
+            df = self.ref.docfreqs
             df[idx] = df.get(idx, 0) + 1
 
         self.mapping[doc.name] = doc
