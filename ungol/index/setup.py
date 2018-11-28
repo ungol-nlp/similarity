@@ -50,10 +50,10 @@ import char_split  # noqa
 rq, wq = None, None
 
 
-class Protocol(enum.Enum):
+# class Protocol(enum.Enum):
 
-    DONE = enum.auto()
-    KILL = enum.auto()
+#     DONE = enum.auto()
+#     KILL = enum.auto()
 
 
 # @attr.s
@@ -117,9 +117,9 @@ def _processor(wid: int):
     while True:
         data = rq.get()
 
-        if data is Protocol.KILL:
-            log.info(f'[{pid}] ({wid}) got cyanide')
-            wq.put((wid, Protocol.KILL))
+        if data is None:
+            log.info(f'[{pid}] ({wid}) received death pill')
+            wq.put((wid, None))
             break
 
         else:
@@ -164,7 +164,7 @@ def _read(gen: Generator[str, None, None], processes: int, total: int = None):
         rq.put(text)
 
     for _ in range(processes):
-        rq.put(Protocol.DONE)
+        rq.put(None)
 
     log.info(f'[{pid}] reader process dies')
 
@@ -186,7 +186,9 @@ class Indexer:
     index:   uii.Index = attr.ib()
     processes:     int = attr.ib()
 
-    def _insert(self, gen: Generator[str, None, None], total: int = None):
+    def _insert(self,
+                gen: Generator[Tuple[str, str], None, None],
+                total: int = None) -> int:
         """
 
         This function blocks until all data provided by
@@ -218,11 +220,13 @@ class Indexer:
 
         # work
 
+        count = 0
         while len(busy):
             wid, content = wq.get()
 
             assert wid in busy
-            if content == Protocol.KILL:
+            if content is None:
+                log.info(f'[{pid}] (main) worker ({wid}) signaled death')
                 busy.remove(wid)
                 continue
 
@@ -231,18 +235,23 @@ class Indexer:
             try:
                 doc = uii.Doc.from_tokens(doc_id, tokens, self.index.ref)
                 self.index += doc
+                count += 1
                 progress.update(1)
 
             except uii.DocumentEmptyException:
                 self.index.ref.skipped.append(doc_id)
 
         progress.close()
+        print('\n' * (self.processes + 2))
+        print('-' * 80)
+        print()
 
-        # just to avoid race conditions;
-        # unlikely to be alive at this point
+        # reader might be the slowest component
         log.info('(main) awaiting reader to finish')
         p_reader.join()
         log.info('(main) reader finished, returning')
+
+        return count
 
     def __enter__(self):
         global rq
@@ -254,11 +263,6 @@ class Indexer:
 
         rq, wq = mp.Queue(), mp.Queue()
         self._wids = set(range(self.processes))
-
-        for wid in self._wids:
-            log.info(f'[{pid}] (main) dispatching process {wid}')
-            mp.Process(target=_processor, args=(wid, )).start()
-
         return self._insert
 
     def __exit__(self, *args):
