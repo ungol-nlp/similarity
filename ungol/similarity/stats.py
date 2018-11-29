@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 
-from ungol.wmd import wmd
+from ungol.index import index as uii
 
 import attr
 import numpy as np
@@ -25,7 +25,7 @@ class ScoreData:
     name:    str = attr.ib()
     score: float = attr.ib()
 
-    docs: Tuple[wmd.Doc] = attr.ib()
+    docs: Tuple[uii.Doc] = attr.ib()
 
     common_unknown: Set[str] = attr.ib(default=attr.Factory(set))
 

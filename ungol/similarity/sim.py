@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 
-from ungol.wmd import wmd
-from ungol.wmd import stats
-from ungol.wmd import rhwmd as _rhwmd
+from ungol.index import index as uii
+from ungol.similarity import stats
+from ungol.similarity import rhwmd as _rhwmd
 
 import numpy as np
 
@@ -11,7 +11,7 @@ import numpy as np
 Strategy = _rhwmd.Strategy
 
 
-def _get_docs(db: wmd.Database, s_doc1: str, s_doc2: str):
+def _get_docs(db: uii.Index, s_doc1: str, s_doc2: str):
     assert s_doc1 in db.mapping, f'"{s_doc1}" not in database'
     assert s_doc2 in db.mapping, f'"{s_doc2}" not in database'
     return db.mapping[s_doc1], db.mapping[s_doc2]
@@ -30,8 +30,8 @@ def _get_docs(db: wmd.Database, s_doc1: str, s_doc2: str):
 #    - prefixes: s_* for str, a_* for np.array, n_ for scalars
 #
 def _rhwmd_similarity(
-        db: wmd.Database,
-        doc1: wmd.Doc, doc2: wmd.Doc,
+        index: uii.Index,
+        doc1: uii.Doc, doc2: uii.Doc,
         verbose: bool) -> float:
 
     # ----------------------------------------
@@ -55,7 +55,7 @@ def _rhwmd_similarity(
 
     def idf(doc) -> np.array:
         a_df = np.hstack((a_unknown, np.array(doc.docfreqs)))
-        N = len(db.mapping)  # FIXME add unknown tokens
+        N = len(index.mapping)  # FIXME add unknown tokens
         a_idf = np.log(N / a_df)
         return a_idf
 
@@ -139,12 +139,12 @@ def _rhwmd_similarity(
     return n_score1, n_score2, scoredata
 
 
-def rhwmd(db: wmd.Database, s_doc1: str, s_doc2: str,
+def rhwmd(index: uii.Index, s_doc1: str, s_doc2: str,
           strategy: Strategy = Strategy.ADAPTIVE_SMALL,
           verbose: bool = False):
 
-    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
-    score1, score2, scoredata = _rhwmd_similarity(db, doc1, doc2, verbose)
+    doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
+    score1, score2, scoredata = _rhwmd_similarity(index, doc1, doc2, verbose)
 
     # select score based on a strategy
 
@@ -183,11 +183,11 @@ def _bm25_normalization(a_tf, n_len: int, k1: float, b: float):
     return a_num / a_den
 
 
-def bm25(db: wmd.Database, s_doc1: str, s_doc2: str,
+def bm25(index: uii.Index, s_doc1: str, s_doc2: str,
          k1=1.56, b=0.45, verbose: bool = False):
 
-    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
-    ref = db.docref
+    doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
+    ref = index.docref
 
     # gather common tokens
     common = set(doc1.tokens) & set(doc2.tokens)
@@ -202,14 +202,14 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str,
     a_df = np.array([ref.docfreqs[idx] for idx in a_common_idx])
 
     # calculate idf value
-    a_idf = np.log(len(db.mapping) / a_df)
+    a_idf = np.log(len(index.mapping) / a_df)
 
     # find corresponding token counts
     # note: a[:, None] == np.array([a]).T
     a_tf = doc2.cnt[np.nonzero(a_common_idx[:, None] == doc2.idx)[1]]
     assert len(a_tf) == len(common)
 
-    n_len = len(doc2) / db.avg_doclen
+    n_len = len(doc2) / index.avg_doclen
     a_norm = _bm25_normalization(a_tf, n_len, k1, b)
 
     # weight each idf value
@@ -245,18 +245,18 @@ def bm25(db: wmd.Database, s_doc1: str, s_doc2: str,
 #  RH-WMD-25 |----------------------------------------
 #
 #
-def rhwmd25(db: wmd.Database, s_doc1: str, s_doc2: str,
+def rhwmd25(index: uii.Index, s_doc1: str, s_doc2: str,
             k1=1.56, b=0.45,
             verbose: bool = False, ):
 
-    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
+    doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
     (a_nn_sim, _), (a_nn_idx, _) = _rhwmd.retrieve_nn(doc1, doc2)
 
-    a_df = np.array([db.docref.docfreqs[idx] for idx in doc1.idx])
-    a_idf = np.log(len(db.mapping) / a_df)
+    a_df = np.array([index.docref.docfreqs[idx] for idx in doc1.idx])
+    a_idf = np.log(len(index.mapping) / a_df)
     a_tf = np.array([doc2.cnt[i] for i in a_nn_idx])
 
-    n_len = len(doc2) / db.avg_doclen
+    n_len = len(doc2) / index.avg_doclen
     a_norm = _bm25_normalization(a_tf, n_len, k1, b)
 
     a_res = a_idf * a_norm * a_nn_sim
@@ -292,9 +292,9 @@ def rhwmd25(db: wmd.Database, s_doc1: str, s_doc2: str,
 #  TF-IDF |----------------------------------------
 #
 #
-def tfidf(db: wmd.Database, s_doc1: str, s_doc2: str, verbose: bool = False, ):
+def tfidf(index: uii.Index, s_doc1: str, s_doc2: str, verbose: bool = False, ):
 
-    doc1, doc2 = _get_docs(db, s_doc1, s_doc2)
+    doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
 
     common = list(set(doc1.tokens) & set(doc2.tokens))
     if not len(common):
@@ -302,10 +302,10 @@ def tfidf(db: wmd.Database, s_doc1: str, s_doc2: str, verbose: bool = False, ):
             name='tfidf', score=0, docs=(doc1, doc2))
 
     # get code indexes
-    a_common_idx = np.array([db.docref.vocabulary[t] for t in common])
+    a_common_idx = np.array([index.docref.vocabulary[t] for t in common])
 
-    a_df = np.array([db.docref.docfreqs[idx] for idx in a_common_idx])
-    a_idf = np.log(len(db.mapping) / a_df)
+    a_df = np.array([index.docref.docfreqs[idx] for idx in a_common_idx])
+    a_idf = np.log(len(index.mapping) / a_df)
 
     mapping = np.hstack([np.where(doc2.idx == i) for i in a_common_idx])[0]
     a_tf = np.array([doc2.cnt[i] for i in mapping])

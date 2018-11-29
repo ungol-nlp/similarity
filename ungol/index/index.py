@@ -288,22 +288,22 @@ class Index:
             len(self.mapping)))
 
         sbuf.append('  vocabulary: {} words'.format(
-            len(self.docref.vocabulary)))
+            len(self.ref.vocabulary)))
 
         sbuf.append('  filtering: {} stopwords'.format(
-            len(self.docref.stopwords)))
+            len(self.ref.stopwords)))
 
         sbuf.append('  code size: {} bits'.format(
-            self.docref.codemap.shape[1] * 8))
+            self.ref.codemap.shape[1] * 8))
 
         sbuf.append('  tokens: {}'.format(
-            len(self.docref.termfreqs)))
+            len(self.ref.termfreqs)))
 
         sbuf.append('  avg. doc length: {:.5f}'.format(
             self.avg_doclen))
 
         sbuf.append('  skipped: {}'.format(
-            len(self.docref.skipped)))
+            len(self.ref.skipped)))
 
         return '\n' + '\n'.join(sbuf) + '\n'
 
@@ -323,8 +323,8 @@ class Index:
             doc.idx,
             (f'{freq:.2f}' for freq in doc.freq),
             doc.cnt,
-            (self.docref.termfreqs[idx] for idx in doc.idx),
-            (self.docref.docfreqs[idx] for idx in doc.idx), )
+            (self.ref.termfreqs[idx] for idx in doc.idx),
+            (self.ref.docfreqs[idx] for idx in doc.idx), )
 
         buf.append(tabulate(tab_data, headers=headers))
 

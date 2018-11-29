@@ -1,6 +1,6 @@
 # =*= coding: utf-8 -*-
 
-from ungol.wmd import wmd
+from ungol.index import index as uii
 
 import numpy as np
 from tabulate import tabulate
@@ -44,7 +44,7 @@ def _assert_hamming_input(code1, code2):
     assert len(code1.shape) == 1
 
 
-def hamming_bincount(code1: '(bits, )', code2: '(bits, )') -> int:
+def hamming_bincount(code1, code2) -> int:
     _assert_hamming_input(code1, code2)
 
     dist = 0
@@ -54,7 +54,7 @@ def hamming_bincount(code1: '(bits, )', code2: '(bits, )') -> int:
     return dist
 
 
-def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
+def hamming_bitmask(code1, code2) -> int:
     _assert_hamming_input(code1, code2)
 
     mask = 1
@@ -74,7 +74,7 @@ def hamming_bitmask(code1: '(bits, )', code2: '(bits, )') -> int:
 _hamming_lookup = np.array([bincount(x) for x in range(0x100)])
 
 
-def hamming_lookup(code1: '(bits, )', code2: '(bits, )') -> int:
+def hamming_lookup(code1, code2) -> int:
     _assert_hamming_input(code1, code2)
     return _hamming_lookup[code1 ^ code2].sum()
 
@@ -96,7 +96,7 @@ def __print_distance_matrix(T, doc1, doc2):
     print(tabulate(tab_data))
 
 
-def distance_matrix_loop(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
+def distance_matrix_loop(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
 
     def _norm_dist(hamming_dist, c_bits: int, maxdist: int = None):
         # clip too large distance
@@ -141,7 +141,7 @@ _dmv_meshgrid = np.meshgrid(
 _dmv_vectorized_bincount = np.vectorize(lambda x: bin(x).count('1'))
 
 
-def distance_matrix_vectorized(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
+def distance_matrix_vectorized(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
 
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
@@ -153,7 +153,7 @@ def distance_matrix_vectorized(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
     return T / (doc1.codes.shape[1] * 8)
 
 
-def distance_matrix_lookup(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
+def distance_matrix_lookup(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
 
     idx_y = _dmv_meshgrid[0][:len(doc1), :len(doc2)]
     idx_x = _dmv_meshgrid[1][:len(doc1), :len(doc2)]
@@ -168,7 +168,7 @@ def distance_matrix_lookup(doc1: wmd.Doc, doc2: wmd.Doc) -> '(n1, n2)':
 # ---
 
 
-def retrieve_nn(doc1: wmd.Doc, doc2: wmd.Doc):
+def retrieve_nn(doc1: uii.Doc, doc2: uii.Doc):
     # Compute the distance matrix.
     T = distance_matrix_lookup(doc1, doc2)
 
@@ -215,7 +215,7 @@ def mock_codes(bytecount: int) -> Tuple['code1', 'code2']:
     return code1, code2
 
 
-def mock_doc(n: int, bytecount: int = 32) -> wmd.Doc:
+def mock_doc(n: int, bytecount: int = 32) -> uii.Doc:
     """
     To test wmd.distance_matrix_*
     """
@@ -227,11 +227,11 @@ def mock_doc(n: int, bytecount: int = 32) -> wmd.Doc:
 
     vocab = {str(i): i for i in idx}
 
-    ref = wmd.DocReferences(
+    ref = uii.References(
         meta={'knn': [1]},
         vocabulary=vocab,
         codemap=codemap,
         distmap=distmap, )
 
-    doc = wmd.Doc(idx=idx[:n], cnt=np.ones(n).astype(dtype=np.uint), ref=ref)
+    doc = uii.Doc(idx=idx[:n], cnt=np.ones(n).astype(dtype=np.uint), ref=ref)
     return doc
