@@ -71,13 +71,13 @@ class References:
 
     stopwords: Set[str] = attr.ib(default=attr.Factory(set))
 
-    # --- populated when filling the database (db + Doc)
+    # --- populated when filling the index (db + Doc)
 
     termfreqs: Dict[int, int] = attr.ib(default=attr.Factory(dict))
     docfreqs:  Dict[int, int] = attr.ib(default=attr.Factory(dict))
     unknown:   Dict[str, int] = attr.ib(default=attr.Factory(dict))  # FIXME
 
-    # documents not added to the database
+    # documents not added to the index
     skipped:        List[str] = attr.ib(default=attr.Factory(list))
 
     # ---
@@ -282,7 +282,7 @@ class Index:
     # ---
 
     def __str__(self) -> str:
-        sbuf = ['VNGOL database']
+        sbuf = ['VNGOL INDEX']
 
         sbuf.append('  containing: {} documents'.format(
             len(self.mapping)))
