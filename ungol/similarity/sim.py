@@ -151,7 +151,7 @@ def rhwmd(index: uii.Index, s_doc1: str, s_doc2: str,
     if strategy is Strategy.MIN:
         score = min(score1, score2)
 
-    if strategy is Strategy.MAX:
+    elif strategy is Strategy.MAX:
         score = max(score1, score2)
 
     elif strategy is Strategy.ADAPTIVE_SMALL:
@@ -162,6 +162,9 @@ def rhwmd(index: uii.Index, s_doc1: str, s_doc2: str,
 
     elif strategy is Strategy.SUM:
         score = score1 + score2
+
+    else:
+        assert False, f'unknown strategy: "{strategy}"'
 
     if scoredata is not None:
         scoredata.score = score
@@ -187,7 +190,7 @@ def bm25(index: uii.Index, s_doc1: str, s_doc2: str,
          k1=1.56, b=0.45, verbose: bool = False):
 
     doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
-    ref = index.docref
+    ref = index.ref
 
     # gather common tokens
     common = set(doc1.tokens) & set(doc2.tokens)
@@ -252,7 +255,7 @@ def rhwmd25(index: uii.Index, s_doc1: str, s_doc2: str,
     doc1, doc2 = _get_docs(index, s_doc1, s_doc2)
     (a_nn_sim, _), (a_nn_idx, _) = _rhwmd.retrieve_nn(doc1, doc2)
 
-    a_df = np.array([index.docref.docfreqs[idx] for idx in doc1.idx])
+    a_df = np.array([index.ref.docfreqs[idx] for idx in doc1.idx])
     a_idf = np.log(len(index.mapping) / a_df)
     a_tf = np.array([doc2.cnt[i] for i in a_nn_idx])
 
@@ -302,9 +305,9 @@ def tfidf(index: uii.Index, s_doc1: str, s_doc2: str, verbose: bool = False, ):
             name='tfidf', score=0, docs=(doc1, doc2))
 
     # get code indexes
-    a_common_idx = np.array([index.docref.vocabulary[t] for t in common])
+    a_common_idx = np.array([index.ref.vocabulary[t] for t in common])
 
-    a_df = np.array([index.docref.docfreqs[idx] for idx in a_common_idx])
+    a_df = np.array([index.ref.docfreqs[idx] for idx in a_common_idx])
     a_idf = np.log(len(index.mapping) / a_df)
 
     mapping = np.hstack([np.where(doc2.idx == i) for i in a_common_idx])[0]
