@@ -2,37 +2,22 @@
 # -*- coding: utf-8 -*-
 
 
+from ungol.common.util import ts
+
 from tabulate import tabulate
 
-import os
 import timeit
 import argparse
 import multiprocessing as mp
-from datetime import datetime
 
 from typing import List
 from typing import Tuple
-from typing import Callable
 
 
 # timeit options
 REPS = (7, 10000)
 
 # ---
-
-
-def ts(info: str) -> Callable[[None], None]:
-    pid = os.getpid()
-
-    tstart = datetime.now()
-    print('[{}] running: {}'.format(pid, info))
-
-    def _done():
-        tdelta = (datetime.now() - tstart).total_seconds() * 1000
-        print('[{pid}] {info} took: {:.3f}ms'.format(
-            tdelta, info=info, pid=pid))
-
-    return _done
 
 
 def _timeit(cmd: str, setup: str) -> float:
