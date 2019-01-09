@@ -79,6 +79,10 @@ def hamming_lookup(code1, code2) -> int:
     return _hamming_lookup[code1 ^ code2].sum()
 
 
+def hamming(code1, code2) -> float:
+    return hamming_lookup(code1, code2) / (len(code1) * 8)
+
+
 #
 #  -------------------- DISTANCE CALCULATIONS
 #
