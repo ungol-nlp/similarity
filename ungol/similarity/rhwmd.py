@@ -1,12 +1,17 @@
 # =*= coding: utf-8 -*-
 
+from ungol.common import logger
 from ungol.index import index as uii
+from ungol.similarity import measures as usm
 
 import numpy as np
 from tabulate import tabulate
 
 import enum
 from typing import Tuple
+
+
+log = logger.get('similarity.rhwmd')
 
 
 def bincount(x: int):
@@ -31,56 +36,6 @@ class Strategy(enum.Enum):
 
     # score(d1, d2) + score(d2, d1)
     SUM = enum.auto()
-
-
-#
-#  -------------------- HAMMING CALCULATIONS
-#
-
-
-def _assert_hamming_input(code1, code2):
-    assert code1.shape == code2.shape
-    assert code1.dtype == np.uint8
-    assert len(code1.shape) == 1
-
-
-def hamming_bincount(code1, code2) -> int:
-    _assert_hamming_input(code1, code2)
-
-    dist = 0
-    for char in code1 ^ code2:
-        dist += bincount(char)
-
-    return dist
-
-
-def hamming_bitmask(code1, code2) -> int:
-    _assert_hamming_input(code1, code2)
-
-    mask = 1
-    dist = 0
-
-    # FIXME: can be faster not overwriting char (?)
-
-    for char in code1 ^ code2:
-        while char:
-            dist += char & mask
-            char >>= 1
-
-    return dist
-
-
-# FIXME: this impairs startup time, just save a big array with the values here
-_hamming_lookup = np.array([bincount(x) for x in range(0x100)])
-
-
-def hamming_lookup(code1, code2) -> int:
-    _assert_hamming_input(code1, code2)
-    return _hamming_lookup[code1 ^ code2].sum()
-
-
-def hamming(code1, code2) -> float:
-    return hamming_lookup(code1, code2) / (len(code1) * 8)
 
 
 #
@@ -125,7 +80,7 @@ def distance_matrix_loop(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
         for j in range(n2):
             c2 = doc2[j]
 
-            hamming_dist = hamming_lookup(c1, c2)
+            hamming_dist = usm.hamming(c1, c2)
             # hamming_dist = hamming_bincount(c1, c2)
             normed = _norm_dist(hamming_dist, c_bits, 100)
             T[i][j] = normed
@@ -165,7 +120,7 @@ def distance_matrix_lookup(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
     C1 = doc1[idx_x]
     C2 = doc2[idx_y]
 
-    T = _hamming_lookup[C1 ^ C2].sum(axis=-1)
+    T = usm.hamming_vec(C1, C2)
     return T / (doc1.codes.shape[1] * 8)
 
 
