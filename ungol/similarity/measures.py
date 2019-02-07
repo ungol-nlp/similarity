@@ -40,7 +40,7 @@ log = logger.get('similarity.measures')
 #     return sortdists, sortindices
 
 
-def topk(a, k):
+def topk(a, k: int = None):
     """
     Return the top k elements and indexes of vector a with length n.
     The resulting k elements are sorted ascending and the returned
@@ -51,7 +51,7 @@ def topk(a, k):
     FIXME: For further speedup use the "bottleneck" implementation.
 
     """
-    a_idx = np.argpartition(a, k)[:k]
+    a_idx = np.arange(len(a)) if k is None else np.argpartition(a, k)[:k]
     s_idx = np.argsort(a[a_idx])
 
     idx = a_idx[s_idx]
@@ -93,12 +93,12 @@ def hamming_atoa(X, Y, k: int = None):
     """
     see hamming()
     """
-    n, m = X.shape[0], Y.shape[0]
-    k = m if k is None else k
+    n = X.shape[0]
+    m = Y.shape[0] if k is None else k
 
     # even if it might be possible to fully vectorize it
     # this approach keeps a somewhat sane memory profile
-    top_d, top_i = np.zeros((n, k)), np.zeros((n, k))
+    top_d, top_i = np.zeros((n, m)), np.zeros((n, m))
     for i, x in enumerate(X):
         top_d[i], top_i[i] = hamming_vtoa(x, Y, k=k)
 
