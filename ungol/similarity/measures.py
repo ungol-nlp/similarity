@@ -66,22 +66,27 @@ def topk(a, k):
 #
 
 
-_hamming_lookup = np.array([bin(x).count('1') for x in range(0xff)])
+# NUMPY VECTORIZED OPERATIONS
 
 
-def _hamming_fn(x, Y):
-    return _hamming_lookup[x ^ Y].sum(axis=-1)
+# for b bit the lowest possible distance is 0 and the highest
+# possible distance is b - thus this vector is of size b + 1
+_hamming_lookup = np.array([bin(x).count('1') for x in range(0x100)])
+
+
+def hamming_vectorized(X, Y):
+    return _hamming_lookup[X ^ Y].sum(axis=-1)
 
 
 def hamming_vtov(x, y):
     """
     see hamming()
     """
-    return _hamming_fn(x, y)
+    return hamming_vectorized(x, y)
 
 
 def hamming_vtoa(x, Y, k: int = None):
-    return topk(_hamming_fn(x, Y), k)
+    return topk(hamming_vectorized(x, Y), k)
 
 
 def hamming_atoa(X, Y, k: int = None):
@@ -91,6 +96,8 @@ def hamming_atoa(X, Y, k: int = None):
     n, m = X.shape[0], Y.shape[0]
     k = m if k is None else k
 
+    # even if it might be possible to fully vectorize it
+    # this approach keeps a somewhat sane memory profile
     top_d, top_i = np.zeros((n, k)), np.zeros((n, k))
     for i, x in enumerate(X):
         top_d[i], top_i[i] = hamming_vtoa(x, Y, k=k)

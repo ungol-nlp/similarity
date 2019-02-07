@@ -1,7 +1,6 @@
-from ungol.index import index as uii
 from ungol.similarity import measures as usm
 
-import np
+import numpy as np
 
 from typing import Callable
 
@@ -43,7 +42,7 @@ def test_hamming_vectorized():
 
 
 def test_hamming_vtov():
-    fn = usm.hamming_vtv
+    fn = usm.hamming_vtov
     _hamming_test_min(fn)
     _hamming_test_max(fn)
     _hamming_test_combinations(fn)

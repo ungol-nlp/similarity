@@ -14,10 +14,6 @@ from typing import Tuple
 log = logger.get('similarity.rhwmd')
 
 
-def bincount(x: int):
-    return bin(x).count('1')
-
-
 class Strategy(enum.Enum):
 
     # selecting max(score(d1, d2), score(d2, d1))
@@ -81,7 +77,6 @@ def distance_matrix_loop(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
             c2 = doc2[j]
 
             hamming_dist = usm.hamming(c1, c2)
-            # hamming_dist = hamming_bincount(c1, c2)
             normed = _norm_dist(hamming_dist, c_bits, 100)
             T[i][j] = normed
 
@@ -120,7 +115,7 @@ def distance_matrix_lookup(doc1: uii.Doc, doc2: uii.Doc) -> np.ndarray:
     C1 = doc1[idx_x]
     C2 = doc2[idx_y]
 
-    T = usm.hamming_vec(C1, C2)
+    T = usm.hamming_vectorized(C1, C2)
     return T / (doc1.codes.shape[1] * 8)
 
 

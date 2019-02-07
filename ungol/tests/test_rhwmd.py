@@ -1,13 +1,14 @@
 # -*- coding: utf-8
 
-from ungol.wmd import wmd
+from ungol.similarity import rhwmd
+from ungol.index import index as uii
 
 import numpy as np
 
 from typing import Callable
 
 
-DistanceMatrix = Callable[[wmd.Doc, wmd.Doc], np.array]
+DistanceMatrix = Callable[[uii.Doc, uii.Doc], np.array]
 
 
 def _distance_matrix_test(fn: DistanceMatrix):
@@ -21,30 +22,30 @@ def _distance_matrix_test(fn: DistanceMatrix):
         [0x00, 0x00],
     ]).astype(np.uint8)
 
-    # whatever the normalization
-    # step does: providing the whole
-    # domain should be robust enough
-    distmap = np.array([
-        [0x0, 2 * 0xff],
-        [0x0, 2 * 0xff],
-        [0x0, 2 * 0xff],
-        [0x0, 2 * 0xff],
-    ]).astype(np.uint8)
+    # # whatever the normalization
+    # # step does: providing the whole
+    # # domain should be robust enough
+    # distmap = np.array([
+    #     [0x0, 2 * 0xff],
+    #     [0x0, 2 * 0xff],
+    #     [0x0, 2 * 0xff],
+    #     [0x0, 2 * 0xff],
+    # ]).astype(np.uint8)
 
-    ref = wmd.DocReferences(
+    ref = uii.References(
         meta={'knn': ['1', '∞']},
         vocabulary=vocab,
         stopwords=set(),
         codemap=codemap,
-        distmap=distmap)
+    )
 
     # using different sizes to make sure
     # no dimensions are switched by accident
-    doc1 = wmd.Doc(idx=np.array([0, 1, 2]).astype(np.uint),
+    doc1 = uii.Doc(idx=np.array([0, 1, 2]).astype(np.uint),
                    cnt=np.array([1, 1, 1]).astype(np.uint),
                    ref=ref, )
 
-    doc2 = wmd.Doc(idx=np.array([0, 1, 2, 3]).astype(np.uint),
+    doc2 = uii.Doc(idx=np.array([0, 1, 2, 3]).astype(np.uint),
                    cnt=np.array([1, 1, 1, 1]).astype(np.uint),
                    ref=ref, )
 
@@ -75,17 +76,17 @@ def _distance_matrix_test(fn: DistanceMatrix):
 
 
 def test_distance_matrix_loop():
-    fn = wmd.distance_matrix_loop
+    fn = rhwmd.distance_matrix_loop
     _distance_matrix_test(fn)
 
 
 def test_distance_matrix_vectorized():
-    fn = wmd.distance_matrix_vectorized
+    fn = rhwmd.distance_matrix_vectorized
     _distance_matrix_test(fn)
 
 
 def test_distance_matrix_lookup():
-    fn = wmd.distance_matrix_lookup
+    fn = rhwmd.distance_matrix_lookup
     _distance_matrix_test(fn)
 
 
