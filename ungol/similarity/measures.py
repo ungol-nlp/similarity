@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
 
 A collection of different similarity and distance measure implementations.
@@ -59,7 +56,7 @@ def topk(a, k: int = None):
 
 
 #  HAMMING SPACE
-#  ----------------------------------------|
+#  |----------------------------------------
 #
 #  take care to use the correct input encoding per
 #  function (bit-encoding, byte-encoding, one-hot)
@@ -74,14 +71,17 @@ def topk(a, k: int = None):
 _hamming_lookup = np.array([bin(x).count('1') for x in range(0x100)])
 
 
+# |--------------------  see measures.hamming
+
+
 def hamming_vectorized(X, Y):
+    assert X.dtype == np.uint8, f'X ({X.dtype}) not uint8'
+    assert Y.dtype == np.uint8, f'Y ({Y.dtype}) not uint8'
+
     return _hamming_lookup[X ^ Y].sum(axis=-1)
 
 
 def hamming_vtov(x, y):
-    """
-    see hamming()
-    """
     return hamming_vectorized(x, y)
 
 
@@ -90,9 +90,6 @@ def hamming_vtoa(x, Y, k: int = None):
 
 
 def hamming_atoa(X, Y, k: int = None):
-    """
-    see hamming()
-    """
     n = X.shape[0]
     m = Y.shape[0] if k is None else k
 
@@ -103,6 +100,9 @@ def hamming_atoa(X, Y, k: int = None):
         top_d[i], top_i[i] = hamming_vtoa(x, Y, k=k)
 
     return top_d, top_i
+
+
+# |--------------------  canonical
 
 
 def hamming(X, Y, **kwargs):
@@ -140,7 +140,3 @@ def hamming(X, Y, **kwargs):
         return hamming_vtov(X, Y, **kwargs)
 
     assert False, 'unknown input size'
-
-
-if __name__ == '__main__':
-    pass
