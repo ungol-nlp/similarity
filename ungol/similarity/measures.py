@@ -51,7 +51,7 @@ def topk(a, k: int = None):
     a_idx = np.arange(len(a)) if k is None else np.argpartition(a, k)[:k]
     s_idx = np.argsort(a[a_idx])
 
-    idx = a_idx[s_idx]
+    idx = a_idx[s_idx].astype(np.int)
     return a[idx], idx
 
 
