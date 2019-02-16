@@ -51,7 +51,7 @@ def topk(a, k: int = None):
     a_idx = np.arange(len(a)) if k is None else np.argpartition(a, k)[:k]
     s_idx = np.argsort(a[a_idx])
 
-    idx = a_idx[s_idx].astype(np.int)
+    idx = a_idx[s_idx]
     return a[idx], idx
 
 
@@ -95,7 +95,7 @@ def hamming_atoa(X, Y, k: int = None):
 
     # even if it might be possible to fully vectorize it
     # this approach keeps a somewhat sane memory profile
-    top_d, top_i = np.zeros((n, m)), np.zeros((n, m))
+    top_d, top_i = np.zeros((n, m)), np.zeros((n, m), dtype=np.int)
     for i, x in enumerate(X):
         top_d[i], top_i[i] = hamming_vtoa(x, Y, k=k)
 
